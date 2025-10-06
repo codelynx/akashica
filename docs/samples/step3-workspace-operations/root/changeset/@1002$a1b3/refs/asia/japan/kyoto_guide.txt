@@ -1,0 +1,5 @@
+{
+  "base_path": "asia/japan/kyoto.txt",
+  "hash": "6bb8faff4366ad5244f0905a448d1250ac398be9a2a494575c7378b25cec0cad",
+  "size": 76
+}

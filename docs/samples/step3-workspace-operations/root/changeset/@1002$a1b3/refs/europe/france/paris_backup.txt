@@ -1,0 +1,5 @@
+{
+  "base_path": "europe/france/paris.txt",
+  "hash": "e4f6a8b0c2d5",
+  "size": 94
+}
