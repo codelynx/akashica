@@ -44,3 +44,9 @@ extension RepositoryPath: ExpressibleByStringLiteral {
         self.init(string: value)
     }
 }
+
+extension RepositoryPath: Comparable {
+    public static func < (lhs: RepositoryPath, rhs: RepositoryPath) -> Bool {
+        lhs.pathString < rhs.pathString
+    }
+}

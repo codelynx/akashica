@@ -20,9 +20,14 @@ let package = Package(
             name: "AkashicaS3Storage",
             targets: ["AkashicaS3Storage"]
         ),
+        .executable(
+            name: "akashica",
+            targets: ["AkashicaCLI"]
+        ),
     ],
     dependencies: [
-        .package(url: "https://github.com/awslabs/aws-sdk-swift.git", from: "0.40.0")
+        .package(url: "https://github.com/awslabs/aws-sdk-swift.git", from: "0.40.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0")
     ],
     targets: [
         // Main public API
@@ -54,6 +59,20 @@ let package = Package(
         .target(
             name: "AkashicaCore",
             dependencies: []
+        ),
+
+        // CLI executable
+        .executableTarget(
+            name: "AkashicaCLI",
+            dependencies: [
+                "Akashica",
+                "AkashicaStorage",
+                "AkashicaS3Storage",
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-parse-as-library"])
+            ]
         ),
 
         // Test support (shared test helpers)
