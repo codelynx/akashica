@@ -121,6 +121,23 @@ let workspace = try await repo.createWorkspace(from: "@0")
 // ... (same workflow as above)
 ```
 
+**Multi-Tenant S3 Storage (Optional):**
+
+```swift
+// Isolate multiple repositories in a single S3 bucket
+let tenantStorage = try await S3StorageAdapter(
+    region: "us-east-1",
+    bucket: "shared-bucket",
+    keyPrefix: "customer-123"  // All keys prefixed with "customer-123/"
+)
+
+// Storage layout: s3://shared-bucket/customer-123/objects/<hash>
+//                 s3://shared-bucket/customer-123/branches/main
+//                 s3://shared-bucket/customer-456/objects/<hash>  (different tenant)
+```
+
+**Note:** The `keyPrefix` parameter enables multi-tenant scenarios where multiple isolated repositories share a single S3 bucket. Each tenant's data is completely isolated by prefix.
+
 ## Architecture
 
 ### Dual-Tier Model
@@ -299,14 +316,26 @@ swift test
 # 3. Create S3 bucket (if needed)
 aws s3 mb s3://my-test-bucket
 
-# 4. Run all tests including S3
+# 4. Configure lifecycle policy for automatic test cleanup
+aws s3api put-bucket-lifecycle-configuration --bucket my-test-bucket --lifecycle-configuration '{
+  "Rules": [{
+    "Id": "DeleteTestRuns",
+    "Status": "Enabled",
+    "Prefix": "test-runs/",
+    "Expiration": { "Days": 1 }
+  }]
+}'
+
+# 5. Run all tests including S3
 swift test
-# Runs 150 tests (138 core + 12 S3 integration)
+# Runs 160 tests (148 core + 12 S3 integration)
 ```
 
 **Notes:**
 - S3 tests are automatically skipped if `.credentials/aws-credentials.json` doesn't exist
-- S3 bucket should have a lifecycle policy to auto-delete test objects
+- Each test run uses a unique UUID prefix (`test-runs/<uuid>/`) for isolation
+- Lifecycle policy automatically deletes test artifacts after 1 day
+- Multiple test runs can execute concurrently without conflicts
 - Credentials file is gitignored for security
 
 ### Project Structure
