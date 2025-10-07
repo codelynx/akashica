@@ -4,12 +4,14 @@
 
 Swift package implementing the Akashica repository API, providing type-safe access to the dual-tier workspace model.
 
-**3 Swift modules:**
+**5 Swift modules:**
 - `Akashica` - Public API (actors, protocols, models)
-- `AkashicaStorage` - Storage implementations (LocalStorageAdapter)
+- `AkashicaStorage` - Local storage implementation (LocalStorageAdapter)
+- `AkashicaS3Storage` - AWS S3 storage implementation (S3StorageAdapter)
 - `AkashicaCore` - Internal utilities (manifest parsing, SHA-256)
+- `TestSupport` - Shared test helpers (AWS credential loading, environment management)
 
-**18 source files, 1,856 lines of code** (+ 10 test files, 137 tests)
+**19 source files, 2,189 lines of code** (+ 13 test files, 150 tests passing)
 
 ---
 
@@ -94,9 +96,9 @@ protocol StorageAdapter: Sendable {
 ```
 
 **Implementations:**
-- `LocalStorageAdapter` - Maps to filesystem paths (complete)
-- `S3StorageAdapter` - Future: AWS S3 backend
-- `GCSStorageAdapter` - Future: Google Cloud Storage backend
+- ✅ `LocalStorageAdapter` - Maps to filesystem paths (complete, production-ready, in AkashicaStorage module)
+- ✅ `S3StorageAdapter` - AWS S3 backend (complete, production-ready, **12 integration tests passing**, in AkashicaS3Storage module)
+- ⏳ `GCSStorageAdapter` - Future: Google Cloud Storage backend
 
 ---
 
@@ -336,14 +338,16 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ ContentHash tests (4 tests, SHA-256 verification)
    - ✅ Hash deduplication tests (3 tests, storage integration)
    - ✅ Workflow integration tests (14 tests, end-to-end scenarios)
-   - ✅ Commit metadata tests (11 tests, storage, history, serialization)
+   - ✅ Commit metadata tests (10 tests, storage, history, serialization)
    - ✅ Nested directory tests (13 tests, deep nesting, deletions, publish)
    - ✅ RepositoryPath tests (38 tests, parsing, operations, edge cases)
    - ✅ Model Codable tests (22 tests, JSON serialization, all models)
    - ✅ Model Equality tests (22 tests, Hashable, Set/Dictionary usage)
    - ✅ Diff tests (10 tests, commit/workspace diffs, type changes, edge cases)
+   - ✅ S3 integration tests (12 tests, live AWS S3, all adapter methods)
+   - ✅ TestConfig test (1 test, credential loading)
    - ✅ Placeholder test (1 test, AkashicaCore)
-   - **Total: 137 tests passing**
+   - **Total: 150 tests passing**
 
 6. ✅ ~~**Commit metadata storage**~~ **DONE**
    - ✅ CommitMetadata model with message, author, timestamp, parent
@@ -598,3 +602,85 @@ Build complete! (0.10s)
 - ✅ Physical examples in `docs/samples/` (step0-step4) demonstrate workflows
 - ⚠️ Consider adding workflow diagrams to `docs/two-tier-commit.md` once remaining TODOs land
 - ⚠️ Cross-reference API usage patterns in design docs
+
+---
+
+## S3 Storage Adapter
+
+### Implementation Status: ✅ Complete | ✅ Tests Passing
+
+**Module:** `AkashicaS3Storage` (separate from core to isolate AWS SDK dependencies)
+**File:** `Sources/AkashicaS3Storage/S3StorageAdapter.swift` (333 lines)
+**Tests:** `Tests/AkashicaS3StorageTests/S3IntegrationTests.swift` (12 tests, all passing)
+
+Full implementation of `StorageAdapter` protocol for AWS S3, enabling cloud-based repositories.
+
+### S3 Storage Layout
+
+```
+s3://bucket/
+├── objects/<hash>                              - Content-addressed objects
+├── manifests/<hash>                            - Content-addressed manifests
+├── commits/<commitID>/
+│   ├── root-manifest                           - Commit root manifest
+│   └── metadata.json                           - Commit metadata (ISO8601)
+├── branches/<name>                             - Branch pointers (JSON, CAS)
+└── workspaces/<workspaceID>/
+    ├── metadata.json                           - Workspace metadata
+    ├── files/<path>                            - Workspace files
+    ├── manifests/__root__                      - Root manifest (empty path)
+    ├── manifests/<path>                        - Nested manifests
+    └── cow/<path>                              - COW references (JSON)
+```
+
+### Key Features
+
+- **Error mapping**: `NoSuchKey` → `AkashicaError.fileNotFound`, others → `storageError`
+- **Pagination**: `listBranches()` and `deletePrefix()` handle >1000 objects
+- **Root manifest handling**: Empty paths map to `"__root__"` key
+- **Smart nil returns**: `readWorkspaceFile/Manifest/COWReference` return `nil` only for missing objects, propagate other errors (permissions, network)
+- **CAS branch updates**: Compare-and-swap with conflict detection
+- **Environment credentials**: Uses AWS SDK default credential chain
+
+### Module Isolation Solution
+
+**Problem (Resolved):** Initial implementation placed S3StorageAdapter in `AkashicaStorage` module, causing AWS SDK dependencies to leak into all test targets, resulting in SwiftPM C module linking failures.
+
+**Solution:** Split into separate `AkashicaS3Storage` module
+- ✅ Core tests run independently without AWS SDK (138 tests)
+- ✅ S3 tests run in isolated test target (12 tests)
+- ✅ All 150 tests passing
+- ✅ No AWS SDK dependency contamination
+
+**Package Structure:**
+```swift
+.target(name: "AkashicaStorage", dependencies: ["Akashica", "AkashicaCore"])
+.target(name: "AkashicaS3Storage", dependencies: ["Akashica", "AkashicaCore", .product(name: "AWSS3", package: "aws-sdk-swift")])
+.testTarget(name: "AkashicaTests", dependencies: ["Akashica", "AkashicaStorage"])
+.testTarget(name: "AkashicaS3StorageTests", dependencies: ["Akashica", "AkashicaS3Storage"])
+```
+
+This design allows users to:
+- Use local storage without AWS SDK dependency
+- Opt into S3 storage by importing `AkashicaS3Storage` separately
+- Run core tests without AWS credentials
+
+### AWS Infrastructure & Testing
+
+- **Bucket:** `akashica-test-bucket` (us-east-1)
+- **Lifecycle policy:** Auto-delete objects after 1 day (cost control)
+- **Credentials:** Configured in `.credentials/aws-credentials.json` (gitignored)
+- **Test helper:** `TestSupport/AWSTestConfig` - shared across test targets
+  - Loads credentials using `#file` macro
+  - `setEnvironmentVariables()` - sets AWS_* env vars, returns previous values
+  - `restoreEnvironmentVariables()` - restores env vars in tearDown
+- **Test validation:** Uses `XCTSkip` when credentials unavailable (no secret leakage)
+- **Environment cleanup:** S3 tests restore env vars in `tearDown()` to prevent credential leakage to other tests
+- **Integration tests:** 12 tests covering all StorageAdapter methods against live S3
+
+### Dependencies
+
+- `aws-sdk-swift` (v0.77.1)
+- `AWSS3` product
+- Imports: `Foundation`, `Akashica`, `AkashicaCore`, `AWSS3`, `Smithy`, `AWSClientRuntime`
+

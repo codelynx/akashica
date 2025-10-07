@@ -16,8 +16,14 @@ let package = Package(
             name: "AkashicaStorage",
             targets: ["AkashicaStorage"]
         ),
+        .library(
+            name: "AkashicaS3Storage",
+            targets: ["AkashicaS3Storage"]
+        ),
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/awslabs/aws-sdk-swift.git", from: "0.40.0")
+    ],
     targets: [
         // Main public API
         .target(
@@ -25,12 +31,22 @@ let package = Package(
             dependencies: ["AkashicaCore"]
         ),
 
-        // Storage implementations
+        // Storage implementations (local only)
         .target(
             name: "AkashicaStorage",
             dependencies: [
                 "Akashica",
                 "AkashicaCore"
+            ]
+        ),
+
+        // S3 storage adapter (separate to isolate AWS SDK)
+        .target(
+            name: "AkashicaS3Storage",
+            dependencies: [
+                "Akashica",
+                "AkashicaCore",
+                .product(name: "AWSS3", package: "aws-sdk-swift")
             ]
         ),
 
@@ -40,10 +56,17 @@ let package = Package(
             dependencies: []
         ),
 
+        // Test support (shared test helpers)
+        .target(
+            name: "TestSupport",
+            dependencies: ["Akashica"],
+            path: "Tests/TestSupport"
+        ),
+
         // Tests
         .testTarget(
             name: "AkashicaTests",
-            dependencies: ["Akashica"]
+            dependencies: ["Akashica", "AkashicaStorage", "TestSupport"]
         ),
         .testTarget(
             name: "AkashicaStorageTests",
@@ -52,6 +75,10 @@ let package = Package(
         .testTarget(
             name: "AkashicaCoreTests",
             dependencies: ["AkashicaCore"]
+        ),
+        .testTarget(
+            name: "AkashicaS3StorageTests",
+            dependencies: ["Akashica", "AkashicaS3Storage", "TestSupport"]
         ),
     ]
 )

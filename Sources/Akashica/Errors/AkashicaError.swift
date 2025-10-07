@@ -7,6 +7,7 @@ public enum AkashicaError: Error {
     case commitNotFound(CommitID)
     case fileNotFound(RepositoryPath)
     case branchNotFound(String)
+    case branchConflict(branch: String, expected: CommitID, actual: CommitID?)
     case invalidManifest(String)
     case storageError(Error)
 }
@@ -24,6 +25,12 @@ extension AkashicaError: LocalizedError {
             return "File not found: \(path)"
         case .branchNotFound(let name):
             return "Branch not found: \(name)"
+        case .branchConflict(let branch, let expected, let actual):
+            if let actual = actual {
+                return "Branch conflict: \(branch) expected \(expected) but was \(actual)"
+            } else {
+                return "Branch conflict: \(branch) expected \(expected) but branch does not exist"
+            }
         case .invalidManifest(let reason):
             return "Invalid manifest: \(reason)"
         case .storageError(let error):
