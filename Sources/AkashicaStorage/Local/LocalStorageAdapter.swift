@@ -77,6 +77,24 @@ public struct LocalStorageAdapter: StorageAdapter {
         return hash
     }
 
+    // MARK: - Commit Operations
+
+    public func readRootManifest(commit: CommitID) async throws -> Data {
+        let path = changesetPath(commit: commit).appendingPathComponent(".dir")
+        return try Data(contentsOf: path)
+    }
+
+    public func writeRootManifest(commit: CommitID, data: Data) async throws {
+        let path = changesetPath(commit: commit).appendingPathComponent(".dir")
+
+        try FileManager.default.createDirectory(
+            at: changesetPath(commit: commit),
+            withIntermediateDirectories: true
+        )
+
+        try data.write(to: path)
+    }
+
     // MARK: - Branch Operations
 
     public func readBranch(name: String) async throws -> BranchPointer {

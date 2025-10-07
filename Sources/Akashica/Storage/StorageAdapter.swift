@@ -21,6 +21,19 @@ public protocol StorageAdapter: Sendable {
     /// Write manifest, returns hash
     func writeManifest(data: Data) async throws -> ContentHash
 
+    // MARK: - Commit Operations
+
+    /// Read root manifest for a commit
+    /// - Parameter commit: Commit ID to read root manifest from
+    /// - Returns: Raw manifest data from `changeset/@XXXX/.dir`
+    func readRootManifest(commit: CommitID) async throws -> Data
+
+    /// Write root manifest for a commit
+    /// - Parameters:
+    ///   - commit: Commit ID to write root manifest to
+    ///   - data: Manifest data to write
+    func writeRootManifest(commit: CommitID, data: Data) async throws
+
     // MARK: - Branch Operations
 
     /// Read branch pointer

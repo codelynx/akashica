@@ -142,11 +142,76 @@ public actor AkashicaSession {
     // MARK: - Internal Helpers
 
     private func readFileFromCommit(_ commitID: CommitID, path: RepositoryPath) async throws -> Data {
-        // TODO: Implement commit file reading
+        // Import AkashicaCore for manifest parsing
+        // For now, inline simple parsing to avoid circular dependency
+
         // 1. Read commit root manifest
+        let rootData = try await storage.readRootManifest(commit: commitID)
+
         // 2. Traverse directory manifests to find file
-        // 3. Read object by hash
-        fatalError("Not implemented yet")
+        var currentManifestData = rootData
+        var currentPath = path.components
+
+        // Traverse down the directory tree
+        while !currentPath.isEmpty {
+            let component = currentPath.removeFirst()
+            let isLastComponent = currentPath.isEmpty
+
+            // Parse current manifest
+            let entries = try parseManifest(currentManifestData)
+
+            // Find entry for this component
+            guard let entry = entries.first(where: { $0.name == component }) else {
+                throw AkashicaError.fileNotFound(path)
+            }
+
+            if isLastComponent {
+                // This is the file we're looking for
+                if entry.isDirectory {
+                    throw AkashicaError.fileNotFound(path) // Expected file, got directory
+                }
+                // 3. Read object by hash
+                return try await storage.readObject(hash: ContentHash(value: entry.hash))
+            } else {
+                // This should be a directory, continue traversing
+                if !entry.isDirectory {
+                    throw AkashicaError.fileNotFound(path) // Expected directory, got file
+                }
+                // Read next manifest
+                currentManifestData = try await storage.readManifest(hash: ContentHash(value: entry.hash))
+            }
+        }
+
+        // Empty path (root)
+        throw AkashicaError.fileNotFound(path)
+    }
+
+    // Simple manifest parsing (inline to avoid dependency issues)
+    private func parseManifest(_ data: Data) throws -> [(name: String, hash: String, size: Int64, isDirectory: Bool)] {
+        guard let content = String(data: data, encoding: .utf8) else {
+            throw AkashicaError.invalidManifest("Invalid encoding")
+        }
+
+        return try content
+            .split(separator: "\n")
+            .filter { !$0.isEmpty }
+            .map { line in
+                let parts = line.split(separator: ":", maxSplits: 2)
+                guard parts.count == 3 else {
+                    throw AkashicaError.invalidManifest("Invalid format: \(line)")
+                }
+
+                let hash = String(parts[0])
+                guard let size = Int64(parts[1]) else {
+                    throw AkashicaError.invalidManifest("Invalid size: \(parts[1])")
+                }
+                let name = String(parts[2])
+
+                let isDirectory = name.hasSuffix("/")
+                let cleanName = isDirectory ? String(name.dropLast()) : name
+
+                return (name: cleanName, hash: hash, size: size, isDirectory: isDirectory)
+            }
     }
 
     private func readFileFromWorkspace(_ workspaceID: WorkspaceID, path: RepositoryPath) async throws -> Data {
