@@ -357,6 +357,80 @@ akashica/
 └── Package.swift              # Swift package manifest
 ```
 
+## CLI Tool
+
+Akashica includes a command-line interface for repository management using the **aka:// URI scheme** for explicit path addressing.
+
+### URI Scheme
+
+All file paths use `aka://` URIs to specify exactly where content should be read from or written to:
+
+```bash
+aka:/path              # Relative to current virtual working directory
+aka:///path            # Absolute path from repository root
+aka://main/path        # Read from branch 'main'
+aka://@1234/path       # Read from commit @1234
+```
+
+### Common Commands
+
+**Initialize repository:**
+```bash
+akashica init                              # Local mode
+akashica init --s3-bucket my-bucket        # S3 mode
+```
+
+**Workspace management:**
+```bash
+akashica checkout main                     # Create workspace from branch
+akashica status                            # Show working tree status
+akashica commit -m "Add feature"           # Commit changes
+```
+
+**File operations:**
+```bash
+# Copy files to/from repository
+akashica cp file.txt aka:/draft.txt        # Upload to workspace
+akashica cp aka:/draft.txt file.txt        # Download from workspace
+akashica cp aka://main/config.yml .        # Download from branch
+
+# Repository operations
+akashica cat aka:/file.txt                 # Display file contents
+akashica cat aka://main/README.md          # Read from branch
+akashica cat aka://@1234/data.json         # Read from commit
+
+akashica ls aka:/                          # List current directory
+akashica ls aka:///projects/               # List absolute path
+akashica ls aka://main/                    # List branch contents
+
+akashica mv aka:/old.txt aka:/new.txt      # Rename file
+akashica rm aka:/draft.pdf                 # Delete file
+```
+
+**Navigation:**
+```bash
+akashica pwd                               # Print virtual working directory
+akashica cd aka:/tokyo                     # Change directory
+akashica cd aka:///japan/tokyo             # Absolute path
+```
+
+**History and branches:**
+```bash
+akashica log                               # Show commit history
+akashica branch                            # List branches
+akashica diff                              # Show workspace changes
+akashica diff aka:/file.txt                # Show changes for specific file
+```
+
+### Key Features
+
+- **Explicit scope targeting**: URIs make it clear whether you're accessing workspace, branch, or commit
+- **No path ambiguity**: `aka:/tokyo/data.txt` is always relative, `aka:///tokyo/data.txt` is always absolute
+- **Read from any ref**: Commands like `cat` and `ls` can read from branches and commits directly
+- **Write validation**: Write operations automatically validate that the target is writable (workspace only)
+
+See [docs/URI_SCHEME.md](docs/URI_SCHEME.md) for complete URI specification.
+
 ## Design Documents
 
 Detailed design documentation is available in the `docs/` directory:
@@ -365,6 +439,8 @@ Detailed design documentation is available in the `docs/` directory:
 - **two-tier-commit.md** - Dual-tier workspace model
 - **WORKSPACE_DESIGN_SUMMARY.md** - Workspace implementation details
 - **API_IMPLEMENTATION_SUMMARY.md** - Current implementation status
+- **URI_SCHEME.md** - aka:// URI specification and examples
+- **ARCHITECTURE.md** - Session-first CLI architecture
 
 ## Use Cases
 
