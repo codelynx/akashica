@@ -43,7 +43,13 @@ struct Mv: AsyncParsableCommand {
             throw ExitCode.failure
         }
 
-        // Get session (both must be same workspace)
+        // Both must be in the same scope (same workspace)
+        guard case .currentWorkspace = srcURI.scope, case .currentWorkspace = dstURI.scope else {
+            print("Error: Source and destination must be in the same workspace")
+            throw ExitCode.failure
+        }
+
+        // Get session
         let session = try await config.getSession(for: srcURI.scope)
 
         // Resolve paths

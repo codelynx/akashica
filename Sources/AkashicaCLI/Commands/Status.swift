@@ -4,7 +4,15 @@ import Akashica
 
 struct Status: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Show the working tree status"
+        abstract: "Show the working tree status",
+        discussion: """
+        Shows which files have been added, modified, or deleted in the current workspace.
+
+        Example:
+          akashica status
+
+        Note: Only works with current workspace. Shows changes compared to base commit.
+        """
     )
 
     @OptionGroup var storage: StorageOptions

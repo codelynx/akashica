@@ -31,34 +31,16 @@ struct Ls: AsyncParsableCommand {
     func run() async throws {
         let config = storage.makeConfig()
 
-        // Determine target path
-        let targetPath: RepositoryPath
-        if let pathArg = path {
-            // Parse URI
-            let uri = try AkaURI.parse(pathArg)
+        // Default to aka:/ (current workspace, relative to CWD)
+        let uriString = path ?? "aka:/"
+        let uri = try AkaURI.parse(uriString)
 
-            // Get session and resolve path
-            let session = try await config.getSession(for: uri.scope)
-            targetPath = try config.resolvePathFromURI(uri)
+        // Get session and resolve path
+        let session = try await config.getSession(for: uri.scope)
+        let targetPath = try config.resolvePathFromURI(uri)
 
-            // List directory
-            try await listDirectory(session: session, path: targetPath)
-        } else {
-            // No path provided - list current virtual CWD
-            // This requires current workspace
-            guard let workspace = try config.currentWorkspace() else {
-                print("Error: No active workspace")
-                print("Run 'akashica checkout <branch>' to create a workspace")
-                throw ExitCode.failure
-            }
-
-            let repo = try await config.createValidatedRepository()
-            let session = await repo.session(workspace: workspace)
-            let vctx = config.virtualContext()
-            targetPath = vctx.currentDirectory()
-
-            try await listDirectory(session: session, path: targetPath)
-        }
+        // List directory
+        try await listDirectory(session: session, path: targetPath)
     }
 
     private func listDirectory(session: AkashicaSession, path: RepositoryPath) async throws {

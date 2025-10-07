@@ -4,12 +4,22 @@ import Akashica
 
 struct Diff: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Show changes between workspace and base commit"
+        abstract: "Show changes between workspace and base commit",
+        discussion: """
+        Shows changes in the current workspace compared to its base commit.
+
+        Examples:
+          akashica diff                    # Show all changes
+          akashica diff aka:/file.txt      # Show changes for specific file
+          akashica diff aka:///docs/       # Show changes in directory
+
+        Note: Only works with current workspace. Cannot diff branches or commits directly.
+        """
     )
 
     @OptionGroup var storage: StorageOptions
 
-    @Argument(help: "File path to show diff for (optional)")
+    @Argument(help: "File path to show diff for (aka:// URI, optional)")
     var path: String?
 
     func run() async throws {
@@ -27,8 +37,19 @@ struct Diff: AsyncParsableCommand {
         let session = await repo.session(workspace: workspace)
         let status = try await session.status()
 
-        // Filter by path if specified
-        let targetPath = path.map { RepositoryPath(string: $0) }
+        // Parse path if specified (must be current workspace URI)
+        let targetPath: RepositoryPath?
+        if let pathArg = path {
+            let uri = try AkaURI.parse(pathArg)
+            guard case .currentWorkspace = uri.scope else {
+                print("Error: diff only works with current workspace")
+                print("Use aka:/ or aka:/// for workspace paths")
+                throw ExitCode.failure
+            }
+            targetPath = try config.resolvePathFromURI(uri)
+        } else {
+            targetPath = nil
+        }
 
         // Show added files
         let added = targetPath.map { target in status.added.filter { $0 == target } } ?? status.added
