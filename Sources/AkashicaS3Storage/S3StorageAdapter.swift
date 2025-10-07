@@ -17,12 +17,19 @@ import AWSClientRuntime
 /// - workspaces/<workspaceID>/files/<path>  - Workspace files
 /// - workspaces/<workspaceID>/manifests/<path> - Workspace manifests
 /// - workspaces/<workspaceID>/cow/<path>    - COW references
+///
+/// Optional keyPrefix for test isolation:
+/// - When provided, all keys are prefixed with "test-runs/<prefix>/"
+/// - Allows multiple concurrent test runs without conflicts
+/// - Test objects are auto-deleted by S3 lifecycle policy (1 day)
 public actor S3StorageAdapter: StorageAdapter {
     private let client: S3Client
     private let bucket: String
+    private let keyPrefix: String
 
-    public init(region: String, bucket: String) async throws {
+    public init(region: String, bucket: String, keyPrefix: String? = nil) async throws {
         self.bucket = bucket
+        self.keyPrefix = keyPrefix.map { "test-runs/\($0)/" } ?? ""
 
         // Create S3 client configuration
         // Uses environment AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
@@ -30,11 +37,16 @@ public actor S3StorageAdapter: StorageAdapter {
         self.client = S3Client(config: config)
     }
 
+    /// Helper to add prefix to key
+    private func prefixedKey(_ path: String) -> String {
+        keyPrefix + path
+    }
+
     // MARK: - Content-Addressed Storage (Objects & Manifests)
 
     public func readObject(hash: ContentHash) async throws -> Data {
-        let tombstoneKey = "objects/\(hash.value).tomb"
-        let objectKey = "objects/\(hash.value)"
+        let tombstoneKey = prefixedKey("objects/\(hash.value).tomb")
+        let objectKey = prefixedKey("objects/\(hash.value)")
 
         // Check for tombstone first
         do {
@@ -52,13 +64,13 @@ public actor S3StorageAdapter: StorageAdapter {
 
     public func writeObject(data: Data) async throws -> ContentHash {
         let hash = ContentHash(data: data)
-        let key = "objects/\(hash.value)"
+        let key = prefixedKey("objects/\(hash.value)")
         try await putObject(key: key, data: data)
         return hash
     }
 
     public func objectExists(hash: ContentHash) async throws -> Bool {
-        let key = "objects/\(hash.value)"
+        let key = prefixedKey("objects/\(hash.value)")
         let input = HeadObjectInput(bucket: bucket, key: key)
         do {
             _ = try await client.headObject(input: input)
@@ -69,13 +81,13 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func readManifest(hash: ContentHash) async throws -> Data {
-        let key = "manifests/\(hash.value)"
+        let key = prefixedKey("manifests/\(hash.value)")
         return try await getObject(key: key)
     }
 
     public func writeManifest(data: Data) async throws -> ContentHash {
         let hash = ContentHash(data: data)
-        let key = "manifests/\(hash.value)"
+        let key = prefixedKey("manifests/\(hash.value)")
         try await putObject(key: key, data: data)
         return hash
     }
@@ -83,17 +95,17 @@ public actor S3StorageAdapter: StorageAdapter {
     // MARK: - Commit Storage
 
     public func readRootManifest(commit: CommitID) async throws -> Data {
-        let key = "commits/\(commit.value)/root-manifest"
+        let key = prefixedKey("commits/\(commit.value)/root-manifest")
         return try await getObject(key: key)
     }
 
     public func writeRootManifest(commit: CommitID, data: Data) async throws {
-        let key = "commits/\(commit.value)/root-manifest"
+        let key = prefixedKey("commits/\(commit.value)/root-manifest")
         try await putObject(key: key, data: data)
     }
 
     public func readCommitMetadata(commit: CommitID) async throws -> CommitMetadata {
-        let key = "commits/\(commit.value)/metadata.json"
+        let key = prefixedKey("commits/\(commit.value)/metadata.json")
         let data = try await getObject(key: key)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -101,7 +113,7 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func writeCommitMetadata(commit: CommitID, metadata: CommitMetadata) async throws {
-        let key = "commits/\(commit.value)/metadata.json"
+        let key = prefixedKey("commits/\(commit.value)/metadata.json")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(metadata)
@@ -111,7 +123,7 @@ public actor S3StorageAdapter: StorageAdapter {
     // MARK: - Branch Operations
 
     public func listBranches() async throws -> [String] {
-        let prefix = "branches/"
+        let prefix = prefixedKey("branches/")
         var branches: [String] = []
         var continuationToken: String? = nil
 
@@ -125,6 +137,7 @@ public actor S3StorageAdapter: StorageAdapter {
 
             let page = (output.contents ?? []).compactMap { object -> String? in
                 guard let key = object.key else { return nil }
+                // Strip prefix to get just the branch name
                 return String(key.dropFirst(prefix.count))
             }
             branches.append(contentsOf: page)
@@ -136,13 +149,13 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func readBranch(name: String) async throws -> BranchPointer {
-        let key = "branches/\(name)"
+        let key = prefixedKey("branches/\(name)")
         let data = try await getObject(key: key)
         return try JSONDecoder().decode(BranchPointer.self, from: data)
     }
 
     public func updateBranch(name: String, expectedCurrent: CommitID?, newCommit: CommitID) async throws {
-        let key = "branches/\(name)"
+        let key = prefixedKey("branches/\(name)")
 
         // Check current value (CAS)
         if let expected = expectedCurrent {
@@ -166,7 +179,7 @@ public actor S3StorageAdapter: StorageAdapter {
     // MARK: - Workspace Operations
 
     public func readWorkspaceMetadata(workspace: WorkspaceID) async throws -> WorkspaceMetadata {
-        let key = "workspaces/\(workspace.fullReference)/metadata.json"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/metadata.json")
         let data = try await getObject(key: key)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -174,7 +187,7 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func writeWorkspaceMetadata(workspace: WorkspaceID, metadata: WorkspaceMetadata) async throws {
-        let key = "workspaces/\(workspace.fullReference)/metadata.json"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/metadata.json")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(metadata)
@@ -182,14 +195,14 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func deleteWorkspace(workspace: WorkspaceID) async throws {
-        let prefix = "workspaces/\(workspace.fullReference)/"
+        let prefix = prefixedKey("workspaces/\(workspace.fullReference)/")
         try await deletePrefix(prefix: prefix)
     }
 
     // MARK: - Workspace Files
 
     public func readWorkspaceFile(workspace: WorkspaceID, path: RepositoryPath) async throws -> Data? {
-        let key = "workspaces/\(workspace.fullReference)/files/\(path.pathString)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/files/\(path.pathString)")
         do {
             return try await getObject(key: key)
         } catch AkashicaError.fileNotFound {
@@ -199,12 +212,12 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func writeWorkspaceFile(workspace: WorkspaceID, path: RepositoryPath, data: Data) async throws {
-        let key = "workspaces/\(workspace.fullReference)/files/\(path.pathString)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/files/\(path.pathString)")
         try await putObject(key: key, data: data)
     }
 
     public func deleteWorkspaceFile(workspace: WorkspaceID, path: RepositoryPath) async throws {
-        let key = "workspaces/\(workspace.fullReference)/files/\(path.pathString)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/files/\(path.pathString)")
         try await deleteObject(key: key)
     }
 
@@ -212,7 +225,7 @@ public actor S3StorageAdapter: StorageAdapter {
 
     public func readWorkspaceManifest(workspace: WorkspaceID, path: RepositoryPath) async throws -> Data? {
         let pathComponent = path.pathString.isEmpty ? "__root__" : path.pathString
-        let key = "workspaces/\(workspace.fullReference)/manifests/\(pathComponent)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/manifests/\(pathComponent)")
         do {
             return try await getObject(key: key)
         } catch AkashicaError.fileNotFound {
@@ -223,14 +236,14 @@ public actor S3StorageAdapter: StorageAdapter {
 
     public func writeWorkspaceManifest(workspace: WorkspaceID, path: RepositoryPath, data: Data) async throws {
         let pathComponent = path.pathString.isEmpty ? "__root__" : path.pathString
-        let key = "workspaces/\(workspace.fullReference)/manifests/\(pathComponent)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/manifests/\(pathComponent)")
         try await putObject(key: key, data: data)
     }
 
     // MARK: - COW References
 
     public func readCOWReference(workspace: WorkspaceID, path: RepositoryPath) async throws -> COWReference? {
-        let key = "workspaces/\(workspace.fullReference)/cow/\(path.pathString)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/cow/\(path.pathString)")
         let data: Data
         do {
             data = try await getObject(key: key)
@@ -242,18 +255,18 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func writeCOWReference(workspace: WorkspaceID, path: RepositoryPath, reference: COWReference) async throws {
-        let key = "workspaces/\(workspace.fullReference)/cow/\(path.pathString)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/cow/\(path.pathString)")
         let data = try JSONEncoder().encode(reference)
         try await putObject(key: key, data: data)
     }
 
     public func deleteCOWReference(workspace: WorkspaceID, path: RepositoryPath) async throws {
-        let key = "workspaces/\(workspace.fullReference)/cow/\(path.pathString)"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/cow/\(path.pathString)")
         try await deleteObject(key: key)
     }
 
     public func workspaceExists(workspace: WorkspaceID) async throws -> Bool {
-        let key = "workspaces/\(workspace.fullReference)/metadata.json"
+        let key = prefixedKey("workspaces/\(workspace.fullReference)/metadata.json")
         let input = HeadObjectInput(bucket: bucket, key: key)
         do {
             _ = try await client.headObject(input: input)
@@ -340,13 +353,13 @@ public actor S3StorageAdapter: StorageAdapter {
     // MARK: - Tombstone Operations
 
     public func deleteObject(hash: ContentHash) async throws {
-        let key = "objects/\(hash.value)"
+        let key = prefixedKey("objects/\(hash.value)")
         let input = DeleteObjectInput(bucket: bucket, key: key)
         _ = try await client.deleteObject(input: input)
     }
 
     public func readTombstone(hash: ContentHash) async throws -> Tombstone? {
-        let key = "objects/\(hash.value).tomb"
+        let key = prefixedKey("objects/\(hash.value).tomb")
 
         do {
             let data = try await getObject(key: key)
@@ -359,7 +372,7 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws {
-        let key = "objects/\(hash.value).tomb"
+        let key = prefixedKey("objects/\(hash.value).tomb")
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -370,7 +383,7 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func listTombstones() async throws -> [ContentHash] {
-        let prefix = "objects/"
+        let prefix = prefixedKey("objects/")
         var tombstones: [ContentHash] = []
         var continuationToken: String? = nil
 
@@ -386,9 +399,9 @@ public actor S3StorageAdapter: StorageAdapter {
                 guard let key = object.key,
                       key.hasSuffix(".tomb") else { return nil }
 
-                // Extract hash from "objects/<hash>.tomb"
+                // Extract hash from "test-runs/<uuid>/objects/<hash>.tomb" or "objects/<hash>.tomb"
                 let hashValue = key
-                    .dropFirst(prefix.count)  // Remove "objects/"
+                    .dropFirst(prefix.count)  // Remove prefix
                     .dropLast(5)              // Remove ".tomb"
                 return ContentHash(value: String(hashValue))
             }

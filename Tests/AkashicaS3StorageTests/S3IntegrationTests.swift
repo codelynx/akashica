@@ -10,6 +10,7 @@ import TestSupport
 final class S3IntegrationTests: XCTestCase {
     var storage: S3StorageAdapter!
     var previousEnv: [String: String?] = [:]
+    var testPrefix: String!
 
     override func setUp() async throws {
         try await super.setUp()
@@ -22,8 +23,11 @@ final class S3IntegrationTests: XCTestCase {
         // Set environment variables for AWS SDK (store previous values for tearDown)
         previousEnv = config.setEnvironmentVariables()
 
-        // Initialize S3 storage adapter
-        storage = try await S3StorageAdapter(region: config.region, bucket: config.bucket)
+        // Generate unique test prefix for isolation (auto-deleted by 1-day lifecycle policy)
+        testPrefix = UUID().uuidString
+
+        // Initialize S3 storage adapter with test prefix
+        storage = try await S3StorageAdapter(region: config.region, bucket: config.bucket, keyPrefix: testPrefix)
     }
 
     override func tearDown() async throws {
