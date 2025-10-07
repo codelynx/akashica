@@ -43,7 +43,7 @@ Add Akashica to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/yourusername/akashica.git", from: "1.0.0")
+    .package(url: "https://github.com/codelynx/akashica.git", from: "0.8.0")
 ]
 ```
 
