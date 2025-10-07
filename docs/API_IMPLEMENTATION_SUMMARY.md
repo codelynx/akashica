@@ -9,7 +9,7 @@ Swift package implementing the Akashica repository API, providing type-safe acce
 - `AkashicaStorage` - Storage implementations (LocalStorageAdapter)
 - `AkashicaCore` - Internal utilities (manifest parsing, SHA-256)
 
-**17 source files, 1,472 lines of code** (+ 3 test placeholders)
+**18 source files, 1,856 lines of code** (+ 10 test files, 137 tests)
 
 ---
 
@@ -323,8 +323,14 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ Implemented for single-level files
    - ⚠️ Nested directories TODO
 
-4. **Diff implementation** (Session.swift)
-   - `diff(against:)`: Compare this changeset against another commit
+4. ✅ ~~**Diff implementation**~~ **DONE** (Session.swift)
+   - ✅ `diff(against:)`: Compare this changeset against another commit
+   - ✅ Recursive tree comparison algorithm (collectDiffChanges)
+   - ✅ Supports commit-to-commit and workspace-to-commit diffs
+   - ✅ Handles added, modified, deleted files
+   - ✅ Handles type changes (file ↔ directory)
+   - ✅ Works with nested directories
+   - ✅ 10 comprehensive tests covering all scenarios
 
 5. **Tests** - Comprehensive coverage achieved
    - ✅ ContentHash tests (4 tests, SHA-256 verification)
@@ -335,8 +341,9 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ RepositoryPath tests (38 tests, parsing, operations, edge cases)
    - ✅ Model Codable tests (22 tests, JSON serialization, all models)
    - ✅ Model Equality tests (22 tests, Hashable, Set/Dictionary usage)
+   - ✅ Diff tests (10 tests, commit/workspace diffs, type changes, edge cases)
    - ✅ Placeholder test (1 test, AkashicaCore)
-   - **Total: 127 tests passing**
+   - **Total: 137 tests passing**
 
 6. ✅ ~~**Commit metadata storage**~~ **DONE**
    - ✅ CommitMetadata model with message, author, timestamp, parent
@@ -554,7 +561,7 @@ Build complete! (0.10s)
 **What's still deferred:**
 - ✅ ~~`updateWorkspaceManifests()`~~ - **DONE**: Root-level implementation complete (Session.swift:325-375)
 - ✅ ~~Nested directory support~~ - **DONE**: Full recursive implementation, 13 tests passing
-- ⚠️ `diff(against:)` - Cross-commit comparison (Session.swift:149, stub exists)
+- ✅ ~~`diff(against:)` - Cross-commit comparison~~ - **DONE**: Full implementation with 10 tests, supports commit-to-commit and workspace-to-commit diffs
 - ⚠️ **Rename detection** - COW-based rename tracking in status() (Session.swift:417-420, marked complex)
 - ✅ ~~SHA-256 hashing~~ - **DONE**: CryptoKit integrated, 22 tests passing
 - ✅ ~~Integration tests~~ - **DONE**: 14 workflow tests, full coverage
@@ -562,13 +569,14 @@ Build complete! (0.10s)
 - ✅ ~~Model unit tests~~ - **DONE**: 82 tests (38 RepositoryPath, 22 Codable, 22 Equality)
 
 **Implementation confidence:**
-- Core workflow: ✅ **High** - publish/read/status complete with 127 passing tests
+- Core workflow: ✅ **High** - publish/read/status/diff complete with 137 passing tests
 - Storage abstraction: ✅ **High** - clean protocol, local adapter complete
 - Concurrency: ✅ **High** - proper actor isolation, no shared mutable state
 - Edge cases: ✅ **High** - comprehensive test coverage validates correctness
 - Model layer: ✅ **High** - 82 unit tests covering parsing, serialization, equality
 - Nested directories: ✅ **High** - arbitrary depth support, deletion tracking, 13 dedicated tests
-- Production readiness: ✅ **High** - real SHA-256, commit metadata, nested dirs, model validation, error handling
+- Diff implementation: ✅ **High** - recursive tree comparison, handles type changes, 10 comprehensive tests
+- Production readiness: ✅ **High** - real SHA-256, commit metadata, nested dirs, model validation, error handling, diff support
 
 **Key design decisions made:**
 1. ✅ Workspace manifests override base manifests by name

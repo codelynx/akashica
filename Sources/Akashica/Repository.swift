@@ -195,11 +195,18 @@ public actor AkashicaRepository {
 
         // Create lookup maps
         var entriesMap: [String: ManifestEntry] = [:]
-        for entry in baseEntries ?? [] {
-            entriesMap[entry.name] = entry
-        }
-        for entry in workspaceEntries ?? [] {
-            entriesMap[entry.name] = entry
+
+        // If workspace manifest exists, it's the complete source of truth
+        // (it tracks deletions by omitting entries)
+        if let wsEntries = workspaceEntries {
+            for entry in wsEntries {
+                entriesMap[entry.name] = entry
+            }
+        } else {
+            // No workspace manifest - use base entries
+            for entry in baseEntries ?? [] {
+                entriesMap[entry.name] = entry
+            }
         }
 
         // Process entries: write objects and build manifest

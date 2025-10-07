@@ -152,9 +152,20 @@ public actor AkashicaSession {
     }
 
     /// Diff this changeset against another commit
+    /// Returns changes needed to transform the target commit into this changeset
+    /// - Parameter commit: The commit to compare against
+    /// - Returns: Array of file changes (added/modified/deleted)
     public func diff(against commit: CommitID) async throws -> [FileChange] {
-        // TODO: Implement diff
-        return []
+        var changes: [FileChange] = []
+
+        // Recursively compare trees
+        try await collectDiffChanges(
+            targetCommit: commit,
+            path: RepositoryPath(string: ""),
+            changes: &changes
+        )
+
+        return changes
     }
 
     // MARK: - Internal Helpers
@@ -558,13 +569,158 @@ public actor AkashicaSession {
 
                 // Only mark as deleted if file existed in workspace manifest but is now gone
                 // If workspace manifest doesn't exist, file is unchanged (still in base)
-                if let workspaceData = workspaceManifestData {
+                if workspaceManifestData != nil {
                     // Workspace manifest exists, so this file should have been in workspaceMap if it still exists
                     if baseEntry.type == .file {
                         deleted.append(filePath)
                     }
                 }
                 // else: no workspace manifest means no changes, file is still in base (unchanged)
+            }
+        }
+    }
+
+    /// Recursively collect diff changes between this changeset and target commit
+    private func collectDiffChanges(
+        targetCommit: CommitID,
+        path: RepositoryPath,
+        changes: inout [FileChange]
+    ) async throws {
+        // Get entries from this changeset (current state)
+        let currentEntries: [DirectoryEntry]
+        do {
+            currentEntries = try await listDirectory(at: path)
+        } catch AkashicaError.fileNotFound {
+            // Directory doesn't exist in current changeset
+            // All files in target are deletions
+            let targetEntries = try? await listDirectoryFromCommit(targetCommit, path: path)
+            if let entries = targetEntries {
+                for entry in entries {
+                    let filePath = path.components.isEmpty
+                        ? RepositoryPath(string: entry.name)
+                        : RepositoryPath(components: path.components + [entry.name])
+                    if entry.type == .directory {
+                        try await collectDiffChanges(
+                            targetCommit: targetCommit,
+                            path: filePath,
+                            changes: &changes
+                        )
+                    } else {
+                        changes.append(FileChange(path: filePath, type: .deleted))
+                    }
+                }
+            }
+            return
+        }
+
+        // Get entries from target commit
+        let targetEntries: [DirectoryEntry]
+        do {
+            targetEntries = try await listDirectoryFromCommit(targetCommit, path: path)
+        } catch AkashicaError.fileNotFound {
+            // Directory doesn't exist in target
+            // All files in current are additions
+            for entry in currentEntries {
+                let filePath = path.components.isEmpty
+                    ? RepositoryPath(string: entry.name)
+                    : RepositoryPath(components: path.components + [entry.name])
+                if entry.type == .directory {
+                    try await collectDiffChanges(
+                        targetCommit: targetCommit,
+                        path: filePath,
+                        changes: &changes
+                    )
+                } else {
+                    changes.append(FileChange(path: filePath, type: .added))
+                }
+            }
+            return
+        }
+
+        // Create lookup maps
+        var currentMap: [String: DirectoryEntry] = [:]
+        for entry in currentEntries {
+            currentMap[entry.name] = entry
+        }
+
+        var targetMap: [String: DirectoryEntry] = [:]
+        for entry in targetEntries {
+            targetMap[entry.name] = entry
+        }
+
+        // Check all current entries
+        var processedNames = Set<String>()
+
+        for (name, currentEntry) in currentMap {
+            processedNames.insert(name)
+            let filePath = path.components.isEmpty
+                ? RepositoryPath(string: name)
+                : RepositoryPath(components: path.components + [name])
+
+            if let targetEntry = targetMap[name] {
+                // Entry exists in both - check if modified
+                if currentEntry.type != targetEntry.type {
+                    // Type changed (file <-> directory)
+                    // Mark old entry as deleted
+                    changes.append(FileChange(path: filePath, type: .deleted))
+
+                    // If new entry is a directory, recurse to mark all contents as added
+                    // If new entry is a file, mark it as added
+                    if currentEntry.type == .directory {
+                        try await collectDiffChanges(
+                            targetCommit: targetCommit,
+                            path: filePath,
+                            changes: &changes
+                        )
+                    } else {
+                        changes.append(FileChange(path: filePath, type: .added))
+                    }
+                } else if currentEntry.type == .directory {
+                    // Both are directories - recurse to compare contents
+                    try await collectDiffChanges(
+                        targetCommit: targetCommit,
+                        path: filePath,
+                        changes: &changes
+                    )
+                } else {
+                    // Both are files - check if hash changed
+                    if currentEntry.hash.value != targetEntry.hash.value {
+                        changes.append(FileChange(path: filePath, type: .modified))
+                    }
+                    // else: unchanged, skip
+                }
+            } else {
+                // Entry only in current - it's an addition
+                if currentEntry.type == .directory {
+                    // Recurse to mark all nested files as added
+                    try await collectDiffChanges(
+                        targetCommit: targetCommit,
+                        path: filePath,
+                        changes: &changes
+                    )
+                } else {
+                    changes.append(FileChange(path: filePath, type: .added))
+                }
+            }
+        }
+
+        // Check for deletions (in target but not in current)
+        for (name, targetEntry) in targetMap {
+            if !processedNames.contains(name) {
+                let filePath = path.components.isEmpty
+                    ? RepositoryPath(string: name)
+                    : RepositoryPath(components: path.components + [name])
+
+                if targetEntry.type == .directory {
+                    // Recurse to mark all nested files as deleted
+                    try await collectDiffChanges(
+                        targetCommit: targetCommit,
+                        path: filePath,
+                        changes: &changes
+                    )
+                } else {
+                    changes.append(FileChange(path: filePath, type: .deleted))
+                }
             }
         }
     }
