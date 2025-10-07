@@ -362,7 +362,7 @@ akashica/
 Akashica includes a command-line interface for repository management using the **aka:// URI scheme** for explicit path addressing.
 
 **📖 For comprehensive documentation, see the [CLI User Guide](docs/CLI_USER_GUIDE.md)** - a complete guide for technical directors and content management teams covering:
-- What Akashica is and why you need it
+- Interactive initialization with guided setup
 - Storage configuration (local and S3)
 - Understanding the two-tier model
 - URI scheme and explicit addressing
@@ -384,8 +384,9 @@ aka://@1234/path       # Read from commit @1234
 
 **Initialize repository:**
 ```bash
-akashica init                              # Local mode
-akashica init --s3-bucket my-bucket        # S3 mode
+akashica init                              # Interactive setup (prompts for local or S3)
+akashica init --s3-bucket my-bucket        # Non-interactive S3 mode
+akashica init --repo /path/to/repo         # Non-interactive local mode
 ```
 
 **Workspace management:**
