@@ -113,9 +113,11 @@ akashica cp local:/tmp/file.txt remote:/docs/file.txt
 # ⚠️ Absolute paths are REMOTE by default
 akashica cp report.pdf /tmp/out.pdf
 # Error: remote-to-remote not supported
+# This fails because /tmp/out.pdf is treated as a repository path!
 
 # ✅ Use local: prefix for absolute local paths
 akashica cp report.pdf local:/tmp/out.pdf
+# Now /tmp/out.pdf is correctly recognized as your local filesystem
 ```
 
 ## Path Navigation
