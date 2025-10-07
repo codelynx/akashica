@@ -150,11 +150,104 @@ akashica log
 
 Congratulations! You've created your first Akashica repository with versioned content.
 
+### Working from Subdirectories
+
+Like Git, Akashica automatically finds your repository root by searching for the `.akashica` directory in parent directories. This means you can run `akashica` commands from anywhere inside your repository:
+
+```bash
+# Initialize repository
+cd /Users/alice/my-content
+akashica init
+akashica checkout main
+
+# Create some nested directories
+mkdir -p projects/tokyo
+cd projects/tokyo
+
+# Commands work from subdirectories
+akashica status          # ✓ Works - finds .akashica in /Users/alice/my-content
+akashica ls aka:/        # ✓ Works - uses virtual CWD
+akashica pwd             # Shows virtual CWD, not filesystem path
+
+# Even from deep nesting
+cd deep/nested/path
+akashica commit -m "Update"  # ✓ Still works
+```
+
+**How it works:**
+
+1. **Filesystem CWD**: Where you are in your terminal (e.g., `/Users/alice/my-content/projects/tokyo`)
+2. **Repository discovery**: Akashica searches upward for `.akashica` directory
+3. **Working root**: The directory containing `.akashica` becomes the repository root
+4. **Virtual CWD**: Your logical position in the content tree (stored in `.akashica/CWD`)
+
+**Benefits:**
+
+- Run commands from any subdirectory (Git-like ergonomics)
+- Prevents accidental nested repositories (init checks parent directories first)
+- Better error messages ("Not in an Akashica repository")
+- IDE and tool integration (editors can invoke Akashica from project subdirectories)
+
+**Example:**
+
+```bash
+$ cd /Users/alice/my-content/scripts/deployment
+$ akashica pwd
+projects/tokyo
+# ↑ Virtual CWD (logical position in content tree)
+
+$ pwd
+/Users/alice/my-content/scripts/deployment
+# ↑ Filesystem CWD (where you are in terminal)
+```
+
+The filesystem location where you run the command is irrelevant—Akashica always finds the repository root and uses the virtual CWD for path resolution.
+
 ---
 
 ## Storage Configuration
 
 Akashica supports two storage backends: **local filesystem** (for development/testing) and **AWS S3** (for production).
+
+### Interactive Setup (Recommended)
+
+When you run `akashica init` without any flags, you'll be prompted to configure storage interactively:
+
+```bash
+$ akashica init
+Configure storage for your Akashica repository:
+
+Storage type:
+  1) Local filesystem (current directory)
+  2) AWS S3 (cloud storage)
+
+Enter choice [1-2]: 1
+
+Initialized empty Akashica repository in /Users/alice/my-content/.akashica
+Created branch 'main' at @0
+```
+
+**Configuration is saved** to `.akashica/config.json` - you never need to specify storage options again:
+
+```json
+{
+  "storage": {
+    "type": "local"
+  }
+}
+```
+
+**All future commands automatically use the saved configuration:**
+```bash
+$ akashica checkout main    # Uses local storage from config
+$ akashica status           # Uses local storage from config
+```
+
+**Already initialized?** Running `akashica init` again will be rejected:
+```bash
+$ akashica init
+Error: Repository already initialized at /Users/alice/my-content/.akashica
+```
 
 ### Local Storage
 
@@ -163,11 +256,16 @@ Akashica supports two storage backends: **local filesystem** (for development/te
 - Small teams with shared network storage
 - Air-gapped or on-premises deployments
 
-**Setup:**
+**Interactive setup:**
 
 ```bash
-# Initialize in current directory
-akashica init
+$ akashica init
+Storage type:
+  1) Local filesystem (current directory)
+> 1
+
+Initialized empty Akashica repository in .akashica
+Created branch 'main' at @0
 
 # This creates .akashica/ directory containing:
 # - objects/      : Content-addressed file storage
@@ -175,6 +273,14 @@ akashica init
 # - commits/      : Commit metadata
 # - branches/     : Branch pointers
 # - workspaces/   : Active editing sessions
+# - config.json   : Storage configuration
+```
+
+**Non-interactive setup (automation):**
+
+```bash
+# Explicitly use local storage
+akashica init --repo /path/to/repository
 ```
 
 **Storage location:**
@@ -240,13 +346,61 @@ Create an IAM policy with these minimum permissions:
 ```
 
 **Step 3: Initialize Akashica repository**
+
+**Interactive setup (recommended):**
 ```bash
-# Set AWS credentials
+# IMPORTANT: Set AWS credentials BEFORE running init
 export AWS_ACCESS_KEY_ID=your_access_key
 export AWS_SECRET_ACCESS_KEY=your_secret_key
 
-# Initialize with S3 backend
-akashica init --s3-bucket my-content-repo --s3-region us-east-1
+# Run interactive init
+$ akashica init
+Storage type:
+  1) Local filesystem (current directory)
+  2) AWS S3 (cloud storage)
+> 2
+
+S3 bucket name: my-content-repo
+AWS region [us-east-1]: us-west-2
+S3 key prefix (optional, press Enter to skip):
+
+Initialized empty Akashica repository in S3 bucket 'my-content-repo'
+  Region: us-west-2
+Created branch 'main' at @0
+```
+
+**If initialization fails:**
+```bash
+Error: Failed to initialize S3 repository
+
+Ensure:
+  - S3 bucket 'my-content-repo' exists and is accessible
+  - AWS credentials are valid
+  - IAM permissions allow s3:PutObject and s3:ListBucket
+
+You can retry 'akashica init' after fixing the issue.
+```
+
+Common solutions:
+- **Bucket doesn't exist**: `aws s3 mb s3://my-content-repo --region us-west-2`
+- **Missing credentials**: Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+- **Wrong region**: Verify bucket region matches the one you specified
+
+This saves configuration to `.akashica/config.json`:
+```json
+{
+  "storage": {
+    "type": "s3",
+    "bucket": "my-content-repo",
+    "region": "us-west-2"
+  }
+}
+```
+
+**Non-interactive setup (automation):**
+```bash
+# Explicitly specify S3 options
+akashica init --s3-bucket my-content-repo --s3-region us-west-2
 ```
 
 **Step 4: Verify setup**
@@ -1424,10 +1578,12 @@ akashica cp . aka:/// --recursive
 akashica commit -m "Initial import of existing content"
 ```
 
-**Note for large migrations**: If migrating many files or large files (GB+), consider:
-- Copying in batches (by directory) to monitor progress
-- Using local storage first, then migrating to S3
-- Testing with a subset of files before full migration
+**Note for large migrations**:
+- **Current file size limit**: No hard limit, but files >100MB may be slow to upload
+- Consider copying in batches (by directory) to monitor progress
+- Use local storage first for large imports, then migrate to S3
+- Test with a subset of files before full migration
+- For very large files (multiple GB), consider alternative solutions or wait for streaming support
 
 Existing files remain on disk. Akashica creates versioned copies in `.akashica/`.
 
