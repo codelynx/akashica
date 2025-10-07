@@ -4,7 +4,9 @@
       "Bash(swift test:*)",
       "Bash(swift build:*)",
       "Bash(swift package show-dependencies:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(.build/debug/akashica init:*)",
+      "Read(//private/tmp/akashica-vfs-test/**)"
     ],
     "deny": [],
     "ask": []
