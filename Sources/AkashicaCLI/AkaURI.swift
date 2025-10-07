@@ -74,7 +74,11 @@ struct AkaURI {
             return AkaURI(scope: scope, path: path)
         } else if uriString.hasPrefix("aka:/") {
             // Relative path, current workspace: aka:/path
-            let path = String(uriString.dropFirst("aka:".count))
+            var path = String(uriString.dropFirst("aka:".count))
+            // Special case: aka:/ means current directory, not root
+            if path == "/" {
+                path = ""
+            }
             return AkaURI(scope: .currentWorkspace, path: path)
         } else {
             throw AkaURIError.invalidScheme(uriString)
@@ -104,6 +108,9 @@ struct AkaURI {
             if path.hasPrefix("/") {
                 // Absolute: aka:///path
                 return "aka://\(path)"
+            } else if path.isEmpty {
+                // Current directory: aka:/
+                return "aka:/"
             } else {
                 // Relative: aka:/path
                 return "aka:/\(path)"
