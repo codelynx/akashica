@@ -13,6 +13,20 @@ public protocol StorageAdapter: Sendable {
     /// Check if object exists
     func objectExists(hash: ContentHash) async throws -> Bool
 
+    /// Delete object (used internally for scrubbing)
+    func deleteObject(hash: ContentHash) async throws
+
+    // MARK: - Tombstone Operations
+
+    /// Read tombstone for deleted content (returns nil if no tombstone)
+    func readTombstone(hash: ContentHash) async throws -> Tombstone?
+
+    /// Write tombstone marker
+    func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws
+
+    /// List all tombstones
+    func listTombstones() async throws -> [ContentHash]
+
     // MARK: - Manifest Operations
 
     /// Read manifest (.dir file) by hash

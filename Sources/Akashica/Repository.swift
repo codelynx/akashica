@@ -279,4 +279,144 @@ public actor AkashicaRepository {
 
         return currentManifestData
     }
+
+    // MARK: - Content Scrubbing
+
+    /// Permanently remove sensitive content from the repository
+    ///
+    /// **WARNING: This operation is irreversible and destructive.**
+    ///
+    /// This creates a tombstone marker and deletes the actual content.
+    /// All commits referencing this content will return `.objectDeleted`
+    /// errors when accessed. History is NOT rewritten - commit manifests
+    /// still reference the hash, but the content is permanently gone.
+    ///
+    /// Use this for:
+    /// - Accidentally committed secrets/credentials
+    /// - GDPR/compliance data removal
+    /// - Security incidents requiring immediate content destruction
+    ///
+    /// Unlike Git's history-rewriting approach (git-filter-repo, BFG),
+    /// Akashica uses tombstones to mark content as deleted without
+    /// rewriting commits. This preserves commit integrity while
+    /// permanently removing sensitive data.
+    ///
+    /// - Parameters:
+    ///   - hash: Content hash to permanently remove
+    ///   - reason: Detailed explanation (required for audit trail)
+    ///   - deletedBy: Email/identifier of person authorizing removal
+    ///
+    /// - Throws: `AkashicaError.fileNotFound` if content doesn't exist
+    ///
+    /// - SeeAlso: https://docs.github.com/removing-sensitive-data
+    public func scrubContent(
+        hash: ContentHash,
+        reason: String,
+        deletedBy: String
+    ) async throws {
+        // Verify object exists before scrubbing
+        guard try await storage.objectExists(hash: hash) else {
+            throw AkashicaError.fileNotFound(RepositoryPath(string: hash.value))
+        }
+
+        // Get original size before deletion
+        let data = try await storage.readObject(hash: hash)
+        let originalSize = Int64(data.count)
+
+        // Create tombstone
+        let tombstone = Tombstone(
+            deletedHash: hash,
+            reason: reason,
+            timestamp: Date(),
+            deletedBy: deletedBy,
+            originalSize: originalSize
+        )
+
+        // Write tombstone first (safer ordering)
+        try await storage.writeTombstone(hash: hash, tombstone: tombstone)
+
+        // Delete actual object
+        try await storage.deleteObject(hash: hash)
+    }
+
+    /// Convenience method to scrub content by file path in a commit
+    ///
+    /// Looks up the content hash for the file at the given path in the
+    /// specified commit, then scrubs it.
+    ///
+    /// - Parameters:
+    ///   - path: Path to the sensitive file
+    ///   - commit: Commit containing the file
+    ///   - reason: Why the content is being scrubbed
+    ///   - deletedBy: Who authorized the scrubbing
+    public func scrubContent(
+        at path: RepositoryPath,
+        in commit: CommitID,
+        reason: String,
+        deletedBy: String
+    ) async throws {
+        // Walk the commit's manifest to find the hash without reading the object
+        let hash = try await getHashFromManifest(commit: commit, path: path)
+
+        // Scrub the content
+        try await scrubContent(
+            hash: hash,
+            reason: reason,
+            deletedBy: deletedBy
+        )
+    }
+
+    /// Get content hash for a file from commit manifest without reading object data
+    private func getHashFromManifest(commit: CommitID, path: RepositoryPath) async throws -> ContentHash {
+        var currentManifestData = try await storage.readRootManifest(commit: commit)
+        let parser = ManifestParser()
+
+        // Walk through path components
+        for (index, component) in path.components.enumerated() {
+            let entries = try parser.parse(currentManifestData)
+
+            guard let entry = entries.first(where: { $0.name == component }) else {
+                throw AkashicaError.fileNotFound(path)
+            }
+
+            // If this is the last component and it's a file, return its hash
+            if index == path.components.count - 1 {
+                guard !entry.isDirectory else {
+                    throw AkashicaError.fileNotFound(path)
+                }
+                return ContentHash(value: entry.hash)
+            }
+
+            // Otherwise it must be a directory - continue walking
+            guard entry.isDirectory else {
+                throw AkashicaError.fileNotFound(path)
+            }
+
+            // Read the subdirectory manifest
+            currentManifestData = try await storage.readManifest(hash: ContentHash(value: entry.hash))
+        }
+
+        // Should never reach here with valid path
+        throw AkashicaError.fileNotFound(path)
+    }
+
+    /// List all tombstones in the repository
+    ///
+    /// Returns all content hashes that have been scrubbed.
+    /// Useful for auditing and compliance reporting.
+    ///
+    /// - Note: TODO: Add pagination support for repositories with many tombstones
+    ///   (v2 feature). Current implementation loads all tombstones into memory.
+    public func listScrubbedContent() async throws -> [(ContentHash, Tombstone)] {
+        let hashes = try await storage.listTombstones()
+
+        var result: [(ContentHash, Tombstone)] = []
+        for hash in hashes {
+            if let tombstone = try await storage.readTombstone(hash: hash) {
+                result.append((hash, tombstone))
+            }
+        }
+
+        return result
+    }
 }

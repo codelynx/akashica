@@ -6,6 +6,7 @@ public enum AkashicaError: Error {
     case workspaceNotFound(WorkspaceID)
     case commitNotFound(CommitID)
     case fileNotFound(RepositoryPath)
+    case objectDeleted(hash: ContentHash, tombstone: Tombstone)
     case branchNotFound(String)
     case branchConflict(branch: String, expected: CommitID, actual: CommitID?)
     case invalidManifest(String)
@@ -23,6 +24,9 @@ extension AkashicaError: LocalizedError {
             return "Commit not found: \(id)"
         case .fileNotFound(let path):
             return "File not found: \(path)"
+        case .objectDeleted(let hash, let tombstone):
+            let timestamp = ISO8601DateFormatter().string(from: tombstone.timestamp)
+            return "Object deleted: hash=\(hash.value), reason=\(tombstone.reason), deletedAt=\(timestamp), deletedBy=\(tombstone.deletedBy)"
         case .branchNotFound(let name):
             return "Branch not found: \(name)"
         case .branchConflict(let branch, let expected, let actual):

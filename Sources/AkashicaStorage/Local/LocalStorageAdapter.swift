@@ -34,8 +34,24 @@ public struct LocalStorageAdapter: StorageAdapter {
     // MARK: - Object Operations
 
     public func readObject(hash: ContentHash) async throws -> Data {
-        let path = objectsPath().appendingPathComponent("\(hash.value).dat")
-        return try Data(contentsOf: path)
+        let tombstonePath = objectsPath().appendingPathComponent("\(hash.value).tomb")
+        let objectPath = objectsPath().appendingPathComponent("\(hash.value).dat")
+
+        // Check for tombstone first
+        if FileManager.default.fileExists(atPath: tombstonePath.path) {
+            let tombstoneData = try Data(contentsOf: tombstonePath)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let tombstone = try decoder.decode(Tombstone.self, from: tombstoneData)
+            throw AkashicaError.objectDeleted(hash: hash, tombstone: tombstone)
+        }
+
+        // Check if object exists
+        guard FileManager.default.fileExists(atPath: objectPath.path) else {
+            throw AkashicaError.fileNotFound(RepositoryPath(string: hash.value))
+        }
+
+        return try Data(contentsOf: objectPath)
     }
 
     public func writeObject(data: Data) async throws -> ContentHash {
@@ -313,5 +329,63 @@ public struct LocalStorageAdapter: StorageAdapter {
             .appendingPathComponent(path.pathString)
 
         try FileManager.default.removeItem(at: refPath)
+    }
+
+    // MARK: - Tombstone Operations
+
+    public func deleteObject(hash: ContentHash) async throws {
+        let path = objectsPath().appendingPathComponent("\(hash.value).dat")
+        guard FileManager.default.fileExists(atPath: path.path) else {
+            throw AkashicaError.fileNotFound(RepositoryPath(string: hash.value))
+        }
+        try FileManager.default.removeItem(at: path)
+    }
+
+    public func readTombstone(hash: ContentHash) async throws -> Tombstone? {
+        let path = objectsPath().appendingPathComponent("\(hash.value).tomb")
+
+        guard FileManager.default.fileExists(atPath: path.path) else {
+            return nil
+        }
+
+        let data = try Data(contentsOf: path)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Tombstone.self, from: data)
+    }
+
+    public func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws {
+        let path = objectsPath().appendingPathComponent("\(hash.value).tomb")
+
+        // Create objects directory if needed
+        try FileManager.default.createDirectory(
+            at: objectsPath(),
+            withIntermediateDirectories: true
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(tombstone)
+        try data.write(to: path)
+    }
+
+    public func listTombstones() async throws -> [ContentHash] {
+        let objectsDir = objectsPath()
+
+        guard FileManager.default.fileExists(atPath: objectsDir.path) else {
+            return []
+        }
+
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: objectsDir,
+            includingPropertiesForKeys: nil
+        )
+
+        return contents.compactMap { url in
+            guard url.pathExtension == "tomb" else { return nil }
+            let hashValue = url.deletingPathExtension().lastPathComponent
+            return ContentHash(value: hashValue)
+        }
     }
 }

@@ -33,8 +33,21 @@ public actor S3StorageAdapter: StorageAdapter {
     // MARK: - Content-Addressed Storage (Objects & Manifests)
 
     public func readObject(hash: ContentHash) async throws -> Data {
-        let key = "objects/\(hash.value)"
-        return try await getObject(key: key)
+        let tombstoneKey = "objects/\(hash.value).tomb"
+        let objectKey = "objects/\(hash.value)"
+
+        // Check for tombstone first
+        do {
+            let tombstoneData = try await getObject(key: tombstoneKey)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let tombstone = try decoder.decode(Tombstone.self, from: tombstoneData)
+            throw AkashicaError.objectDeleted(hash: hash, tombstone: tombstone)
+        } catch AkashicaError.fileNotFound {
+            // No tombstone, proceed to check actual object
+        }
+
+        return try await getObject(key: objectKey)
     }
 
     public func writeObject(data: Data) async throws -> ContentHash {
@@ -322,5 +335,68 @@ public actor S3StorageAdapter: StorageAdapter {
 
             continuationToken = listOutput.nextContinuationToken
         } while continuationToken != nil
+    }
+
+    // MARK: - Tombstone Operations
+
+    public func deleteObject(hash: ContentHash) async throws {
+        let key = "objects/\(hash.value)"
+        let input = DeleteObjectInput(bucket: bucket, key: key)
+        _ = try await client.deleteObject(input: input)
+    }
+
+    public func readTombstone(hash: ContentHash) async throws -> Tombstone? {
+        let key = "objects/\(hash.value).tomb"
+
+        do {
+            let data = try await getObject(key: key)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(Tombstone.self, from: data)
+        } catch AkashicaError.fileNotFound {
+            return nil
+        }
+    }
+
+    public func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws {
+        let key = "objects/\(hash.value).tomb"
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(tombstone)
+
+        try await putObject(key: key, data: data)
+    }
+
+    public func listTombstones() async throws -> [ContentHash] {
+        let prefix = "objects/"
+        var tombstones: [ContentHash] = []
+        var continuationToken: String? = nil
+
+        repeat {
+            let input = ListObjectsV2Input(
+                bucket: bucket,
+                continuationToken: continuationToken,
+                prefix: prefix
+            )
+            let output = try await client.listObjectsV2(input: input)
+
+            let page = (output.contents ?? []).compactMap { object -> ContentHash? in
+                guard let key = object.key,
+                      key.hasSuffix(".tomb") else { return nil }
+
+                // Extract hash from "objects/<hash>.tomb"
+                let hashValue = key
+                    .dropFirst(prefix.count)  // Remove "objects/"
+                    .dropLast(5)              // Remove ".tomb"
+                return ContentHash(value: String(hashValue))
+            }
+            tombstones.append(contentsOf: page)
+
+            continuationToken = output.nextContinuationToken
+        } while continuationToken != nil
+
+        return tombstones
     }
 }

@@ -11,7 +11,7 @@ Swift package implementing the Akashica repository API, providing type-safe acce
 - `AkashicaCore` - Internal utilities (manifest parsing, SHA-256)
 - `TestSupport` - Shared test helpers (AWS credential loading, environment management)
 
-**19 source files, 2,189 lines of code** (+ 13 test files, 150 tests passing)
+**20 source files, 2,545 lines of code** (+ 14 test files, 160 tests passing)
 
 ---
 
@@ -345,9 +345,10 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ Model Equality tests (22 tests, Hashable, Set/Dictionary usage)
    - ✅ Diff tests (10 tests, commit/workspace diffs, type changes, edge cases)
    - ✅ S3 integration tests (12 tests, live AWS S3, all adapter methods)
+   - ✅ Content scrub tests (10 tests, tombstone operations, audit trail)
    - ✅ TestConfig test (1 test, credential loading)
    - ✅ Placeholder test (1 test, AkashicaCore)
-   - **Total: 150 tests passing**
+   - **Total: 160 tests passing**
 
 6. ✅ ~~**Commit metadata storage**~~ **DONE**
    - ✅ CommitMetadata model with message, author, timestamp, parent
@@ -475,6 +476,7 @@ Sources/Akashica/
     WorkspaceStatus.swift                        # Modified/added/deleted files
     FileChange.swift                             # Diff result
     CommitMetadata.swift                         # Commit message, author, timestamp, parent
+    Tombstone.swift                              # Tombstone marker for scrubbed content
   Storage/
     StorageAdapter.swift                         # Protocol for backends
   Errors/
@@ -485,6 +487,9 @@ Sources/Akashica/
 Sources/AkashicaStorage/
   Local/
     LocalStorageAdapter.swift                    # Filesystem implementation
+
+Sources/AkashicaS3Storage/
+  S3StorageAdapter.swift                         # AWS S3 implementation
 
 Sources/AkashicaCore/
   Manifests/
@@ -501,8 +506,12 @@ Tests/
     RepositoryPathTests.swift                    # Path parsing & operations (38 tests)
     ModelCodableTests.swift                      # JSON serialization (22 tests)
     ModelEqualityTests.swift                     # Hashable & equality (22 tests)
+    DiffTests.swift                              # Diff implementation (10 tests)
+    ContentScrubTests.swift                      # Tombstone operations (10 tests)
   AkashicaStorageTests/
     HashDeduplicationTests.swift                 # Storage integration (3 tests)
+  AkashicaS3StorageTests/
+    S3IntegrationTests.swift                     # S3 storage adapter (12 tests)
   AkashicaCoreTests/
     PlaceholderTests.swift                       # Core utilities (1 test)
 ```
@@ -573,7 +582,7 @@ Build complete! (0.10s)
 - ✅ ~~Model unit tests~~ - **DONE**: 82 tests (38 RepositoryPath, 22 Codable, 22 Equality)
 
 **Implementation confidence:**
-- Core workflow: ✅ **High** - publish/read/status/diff complete with 137 passing tests
+- Core workflow: ✅ **High** - publish/read/status/diff complete with 147 passing tests
 - Storage abstraction: ✅ **High** - clean protocol, local adapter complete
 - Concurrency: ✅ **High** - proper actor isolation, no shared mutable state
 - Edge cases: ✅ **High** - comprehensive test coverage validates correctness
@@ -683,4 +692,174 @@ This design allows users to:
 - `aws-sdk-swift` (v0.77.1)
 - `AWSS3` product
 - Imports: `Foundation`, `Akashica`, `AkashicaCore`, `AWSS3`, `Smithy`, `AWSClientRuntime`
+
+---
+
+## Content Scrubbing (Tombstone-Based Deletion)
+
+### Implementation Status: ✅ Complete | ✅ Tests Passing
+
+**Feature:** Permanently remove sensitive content from repository while preserving commit integrity
+**Tests:** `Tests/AkashicaTests/ContentScrubTests.swift` (10 tests, all passing)
+
+Full implementation of tombstone-based content deletion for compliance (GDPR, secrets removal) without history rewriting.
+
+### Overview
+
+Unlike Git's history-rewriting approach (git-filter-repo, BFG), Akashica uses **tombstones** to mark content as deleted without rewriting commits. This:
+- ✅ Preserves commit integrity (hashes unchanged)
+- ✅ Maintains audit trail (who deleted what, when, why)
+- ✅ Prevents recontamination (deleted content stays deleted)
+- ✅ Simplifies collaboration (no force-push cascades)
+
+### Storage Layout
+
+```
+objects/
+├── <hash>.dat                  # Content data (deleted during scrubbing)
+└── <hash>.tomb                 # Tombstone marker (JSON)
+```
+
+**Tombstone format:**
+```json
+{
+  "deletedHash": "sha256...",
+  "reason": "Accidentally committed API key",
+  "timestamp": "2025-10-07T02:58:20Z",
+  "deletedBy": "security@example.com",
+  "originalSize": 1024
+}
+```
+
+### Public API
+
+```swift
+actor AkashicaRepository {
+    /// Permanently remove content by hash
+    /// **WARNING: Irreversible and destructive**
+    func scrubContent(
+        hash: ContentHash,
+        reason: String,
+        deletedBy: String
+    ) async throws
+
+    /// Convenience method to scrub by file path in commit
+    func scrubContent(
+        at path: RepositoryPath,
+        in commit: CommitID,
+        reason: String,
+        deletedBy: String
+    ) async throws
+
+    /// List all scrubbed content for auditing
+    /// - Note: TODO: Add pagination support (v2 feature)
+    func listScrubbedContent() async throws -> [(ContentHash, Tombstone)]
+}
+```
+
+### Storage Protocol Extensions
+
+```swift
+protocol StorageAdapter: Sendable {
+    // Tombstone operations (added to protocol)
+    func deleteObject(hash: ContentHash) async throws
+    func readTombstone(hash: ContentHash) async throws -> Tombstone?
+    func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws
+    func listTombstones() async throws -> [ContentHash]
+}
+```
+
+**Implementation:**
+- ✅ `LocalStorageAdapter` - Filesystem tombstones (`objects/<hash>.tomb`)
+- ✅ `S3StorageAdapter` - S3 tombstones (`objects/<hash>.tomb`) with pagination
+
+### Error Handling
+
+**New error case:**
+```swift
+case objectDeleted(hash: ContentHash, tombstone: Tombstone)
+```
+
+**Error message format (single-line for log compatibility):**
+```
+Object deleted: hash=sha256..., reason=Accidentally committed API key, deletedAt=2025-10-07T02:58:20Z, deletedBy=security@example.com
+```
+
+### Usage Examples
+
+#### Scrub by hash
+```swift
+let repo = AkashicaRepository(storage: storage)
+
+// Scrub known sensitive content
+try await repo.scrubContent(
+    hash: ContentHash(value: "a3f2..."),
+    reason: "Accidentally committed AWS credentials",
+    deletedBy: "security@example.com"
+)
+```
+
+#### Scrub by path
+```swift
+// Find and scrub file in commit
+try await repo.scrubContent(
+    at: RepositoryPath(string: "config/secrets.env"),
+    in: CommitID(value: "@1002"),
+    reason: "GDPR data removal request",
+    deletedBy: "compliance@example.com"
+)
+```
+
+#### Audit trail
+```swift
+// List all scrubbed content
+let scrubbed = try await repo.listScrubbedContent()
+for (hash, tombstone) in scrubbed {
+    print("\(tombstone.deletedBy) removed \(hash.value)")
+    print("Reason: \(tombstone.reason)")
+}
+```
+
+### Implementation Details
+
+#### Optimizations
+- **Manifest walking** - `scrubContent(at:in:)` walks commit manifests to get hash without reading large files
+- **Safe ordering** - Writes tombstone before deleting object (safer failure mode)
+- **Hash verification** - Checks object exists before scrubbing (prevents accidental tombstone creation)
+
+#### Test Coverage
+- ✅ Basic scrubbing (by hash, by path, nested paths)
+- ✅ Error handling (non-existent content, read-only detection)
+- ✅ Audit trail (list tombstones, empty repository)
+- ✅ Error message format (single-line, all components present)
+- ✅ Manifest optimization (10MB file scrubbing < 1 second)
+- ✅ Deduplication effects (shared content affects multiple files)
+- ✅ Persistence (tombstones survive adapter recreation)
+
+#### Files Modified/Created
+- `Sources/Akashica/Models/Tombstone.swift` - Tombstone model (43 lines)
+- `Sources/Akashica/Errors/AkashicaError.swift` - Added `.objectDeleted` case
+- `Sources/Akashica/Storage/StorageAdapter.swift` - Added 4 tombstone methods
+- `Sources/Akashica/Repository.swift` - Added 3 public APIs (+105 lines)
+- `Sources/AkashicaStorage/Local/LocalStorageAdapter.swift` - Tombstone support (+68 lines)
+- `Sources/AkashicaS3Storage/S3StorageAdapter.swift` - Tombstone support with pagination (+71 lines)
+- `Tests/AkashicaTests/ContentScrubTests.swift` - 10 comprehensive tests (360 lines)
+
+#### Design Decisions
+1. ✅ Used `deletedBy` parameter name (not `operator` - Swift keyword conflict)
+2. ✅ Single-line error messages for log compatibility
+3. ✅ Pagination deferred to v2 (documented in code)
+4. ✅ No confirmation prompts in library (belongs in CLI/UI layer)
+5. ✅ No cascade deletion (dangerous, incorrect for content-addressed storage)
+
+### Comparison with Git
+
+| Feature | Git (BFG/filter-repo) | Akashica (Tombstones) |
+|---------|----------------------|----------------------|
+| History rewriting | Required | Not needed |
+| Commit hashes | Changed | Unchanged |
+| Recontamination risk | High | None |
+| Force-push required | Yes | No |
+| Audit trail | Lost | Preserved |
+| Collaboration impact | Major | Minimal |
 
