@@ -53,7 +53,6 @@ struct Checkout: AsyncParsableCommand {
             }
         }
 
-        // Save workspace reference
         // Ensure .akashica directory exists (for both local and S3 modes)
         if !FileManager.default.fileExists(atPath: config.akashicaPath.path) {
             try FileManager.default.createDirectory(
@@ -62,8 +61,12 @@ struct Checkout: AsyncParsableCommand {
             )
         }
 
-        let workspaceFile = config.akashicaPath.appendingPathComponent("WORKSPACE")
-        try workspace.fullReference.write(to: workspaceFile, atomically: true, encoding: .utf8)
+        // Save workspace reference
+        try config.saveWorkspace(workspace)
+
+        // Initialize virtual CWD to root
+        let vctx = config.virtualContext()
+        try vctx.initialize()
 
         switch refType {
         case .commit:
@@ -72,5 +75,6 @@ struct Checkout: AsyncParsableCommand {
             print("Created workspace \(workspace.fullReference) from branch '\(branchName)'")
             print("Base commit: \(baseCommit.value)")
         }
+        print("Virtual CWD: /")
     }
 }

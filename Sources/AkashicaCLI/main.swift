@@ -10,13 +10,21 @@ struct AkashicaCLI: AsyncParsableCommand {
         version: "0.1.0",
         subcommands: [
             Init.self,
-            Status.self,
-            Commit.self,
             Checkout.self,
+            Commit.self,
+            Status.self,
+            Diff.self,
             Log.self,
             Branch.self,
-            Diff.self,
-            Scrub.self
+            Scrub.self,
+            // Virtual filesystem commands
+            Ls.self,
+            Cat.self,
+            Cd.self,
+            Pwd.self,
+            Cp.self,
+            Rm.self,
+            Mv.self
         ]
     )
 }

@@ -22,17 +22,8 @@ struct Commit: AsyncParsableCommand {
         let repo = try await config.createValidatedRepository()
 
         // Get current workspace
-        let workspaceFile = config.akashicaPath.appendingPathComponent("WORKSPACE")
-        guard FileManager.default.fileExists(atPath: workspaceFile.path) else {
-            print("Error: Not in a workspace")
-            throw ExitCode.failure
-        }
-
-        let workspaceRef = try String(contentsOf: workspaceFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard let workspace = parseWorkspaceID(workspaceRef) else {
-            print("Error: Invalid workspace reference")
+        guard let workspace = try config.currentWorkspace() else {
+            print("Error: Not in a workspace. Use 'akashica checkout' to create one.")
             throw ExitCode.failure
         }
 
@@ -47,19 +38,10 @@ struct Commit: AsyncParsableCommand {
             author: author
         )
 
-        // Clear workspace file
-        try? FileManager.default.removeItem(at: workspaceFile)
+        // Clear workspace
+        try config.clearWorkspace()
 
         print("[\(branch) \(newCommit.value)] \(message)")
-    }
-
-    private func parseWorkspaceID(_ ref: String) -> WorkspaceID? {
-        let parts = ref.split(separator: "$")
-        guard parts.count == 2 else { return nil }
-
-        let baseCommit = CommitID(value: String(parts[0]))
-        let suffix = String(parts[1])
-
-        return WorkspaceID(baseCommit: baseCommit, workspaceSuffix: suffix)
+        print("Workspace published and closed")
     }
 }

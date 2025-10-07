@@ -46,9 +46,20 @@ struct Config {
         }
 
         self.akashicaPath = self.repoPath.appendingPathComponent(".akashica")
-        self.s3Bucket = s3Bucket
-        self.s3Prefix = s3Prefix
-        self.s3Region = s3Region
+
+        // Try to read config file first, then override with command-line options
+        if let configFile = try? ConfigFile.read(from: akashicaPath),
+           let storage = configFile.storage {
+            // Config file exists - use it as defaults
+            self.s3Bucket = s3Bucket ?? (storage.type == "s3" ? storage.bucket : nil)
+            self.s3Prefix = s3Prefix ?? storage.prefix
+            self.s3Region = s3Region ?? storage.region
+        } else {
+            // No config file - use command-line options only
+            self.s3Bucket = s3Bucket
+            self.s3Prefix = s3Prefix
+            self.s3Region = s3Region
+        }
     }
 
     /// Find repository root by looking for .akashica directory
@@ -145,6 +156,48 @@ struct Config {
     func createRepository() async throws -> AkashicaRepository {
         let storage = try await createStorage()
         return AkashicaRepository(storage: storage)
+    }
+
+    /// Get virtual context for path resolution
+    func virtualContext() -> VirtualContext {
+        return VirtualContext(akashicaPath: akashicaPath)
+    }
+
+    /// Read current workspace ID from .akashica/WORKSPACE
+    func currentWorkspace() throws -> WorkspaceID? {
+        let workspacePath = akashicaPath.appendingPathComponent("WORKSPACE")
+
+        guard FileManager.default.fileExists(atPath: workspacePath.path) else {
+            return nil
+        }
+
+        let workspaceRef = try String(contentsOf: workspacePath, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return parseWorkspaceID(workspaceRef)
+    }
+
+    /// Save current workspace ID to .akashica/WORKSPACE
+    func saveWorkspace(_ workspace: WorkspaceID) throws {
+        let workspacePath = akashicaPath.appendingPathComponent("WORKSPACE")
+        try workspace.fullReference.write(to: workspacePath, atomically: true, encoding: .utf8)
+    }
+
+    /// Clear current workspace
+    func clearWorkspace() throws {
+        let workspacePath = akashicaPath.appendingPathComponent("WORKSPACE")
+        try? FileManager.default.removeItem(at: workspacePath)
+    }
+
+    /// Parse workspace ID from string (e.g., "@abc$xyz")
+    private func parseWorkspaceID(_ ref: String) -> WorkspaceID? {
+        let parts = ref.split(separator: "$")
+        guard parts.count == 2 else { return nil }
+
+        let baseCommit = CommitID(value: String(parts[0]))
+        let suffix = String(parts[1])
+
+        return WorkspaceID(baseCommit: baseCommit, workspaceSuffix: suffix)
     }
 }
 

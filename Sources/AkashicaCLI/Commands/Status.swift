@@ -15,20 +15,9 @@ struct Status: AsyncParsableCommand {
         // Create validated repository (efficient - one S3 adapter creation)
         let repo = try await config.createValidatedRepository()
 
-        // Try to find current workspace from .akashica/WORKSPACE file
-        let workspaceFile = config.akashicaPath.appendingPathComponent("WORKSPACE")
-
-        guard FileManager.default.fileExists(atPath: workspaceFile.path) else {
+        // Get current workspace
+        guard let workspace = try config.currentWorkspace() else {
             print("Not in a workspace. Use 'akashica checkout' to create one.")
-            throw ExitCode.failure
-        }
-
-        let workspaceRef = try String(contentsOf: workspaceFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Parse workspace ID
-        guard let workspace = parseWorkspaceID(workspaceRef) else {
-            print("Error: Invalid workspace reference: \(workspaceRef)")
             throw ExitCode.failure
         }
 
@@ -64,16 +53,5 @@ struct Status: AsyncParsableCommand {
             }
             print("")
         }
-    }
-
-    private func parseWorkspaceID(_ ref: String) -> WorkspaceID? {
-        // Format: @1001$a1b3
-        let parts = ref.split(separator: "$")
-        guard parts.count == 2 else { return nil }
-
-        let baseCommit = CommitID(value: String(parts[0]))
-        let suffix = String(parts[1])
-
-        return WorkspaceID(baseCommit: baseCommit, workspaceSuffix: suffix)
     }
 }
