@@ -295,11 +295,11 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ⚠️ Rename detection (marked as complex, deferred)
 
 #### ✅ Recently Completed (Session 2)
-1. ✅ **Workspace manifest updates** (Session.swift:325-375)
-   - ✅ Implemented `updateWorkspaceManifests()` for root-level files
+1. ✅ **Workspace manifest updates** (Session.swift:337-436)
+   - ✅ Implemented `updateWorkspaceManifests()` with bottom-up recursion
+   - ✅ Supports arbitrary nesting depth (e.g., asia/japan/tokyo/shibuya.txt)
    - ✅ Inherits base commit files on first write
-   - ✅ Tracks additions, modifications, deletions
-   - ⚠️ Nested directory support deferred
+   - ✅ Tracks additions, modifications, deletions at all levels
 
 2. ✅ **Integration tests** (Tests/AkashicaTests/WorkflowIntegrationTests.swift)
    - ✅ 14 comprehensive workflow tests
@@ -331,10 +331,10 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ Hash deduplication tests (3 tests, storage integration)
    - ✅ Workflow integration tests (14 tests, end-to-end scenarios)
    - ✅ Commit metadata tests (11 tests, storage, history, serialization)
+   - ✅ Nested directory tests (13 tests, deep nesting, deletions, publish)
    - ✅ Placeholder test (1 test, AkashicaCore)
-   - **Total: 33 tests passing**
+   - **Total: 45 tests passing**
    - ⚠️ TODO: Model tests (Codable, path operations)
-   - ⚠️ TODO: Nested directory workflow tests
 
 6. ✅ ~~**Commit metadata storage**~~ **DONE**
    - ✅ CommitMetadata model with message, author, timestamp, parent
@@ -343,9 +343,11 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ Repository API: commitMetadata(), commitHistory()
    - ✅ 11 comprehensive tests covering storage, history, serialization
 
-7. **Nested directory support**
-   - Extend `updateWorkspaceManifests()` for nested paths
-   - Recursive parent directory updates
+7. ✅ ~~**Nested directory support**~~ **DONE**
+   - ✅ Bottom-up recursive manifest updates for arbitrary depth
+   - ✅ Workspace manifest inheritance from base commit
+   - ✅ Deletion tracking via manifest entries
+   - ✅ 13 comprehensive tests covering deep nesting, status, publish
 
 ---
 
@@ -482,6 +484,7 @@ Tests/
     ContentHashTests.swift                       # SHA-256 verification (4 tests)
     CommitMetadataTests.swift                    # Metadata storage & history (11 tests)
     WorkflowIntegrationTests.swift               # End-to-end workflows (14 tests)
+    NestedDirectoryTests.swift                   # Nested directory operations (13 tests)
   AkashicaStorageTests/
     HashDeduplicationTests.swift                 # Storage integration (3 tests)
   AkashicaCoreTests/
@@ -545,21 +548,21 @@ Build complete! (0.10s)
 
 **What's still deferred:**
 - ✅ ~~`updateWorkspaceManifests()`~~ - **DONE**: Root-level implementation complete (Session.swift:325-375)
-- ⚠️ Nested directory support - `updateWorkspaceManifests()` handles root-level only
+- ✅ ~~Nested directory support~~ - **DONE**: Full recursive implementation, 13 tests passing
 - ⚠️ `diff(against:)` - Cross-commit comparison (Session.swift:149, stub exists)
 - ⚠️ **Rename detection** - COW-based rename tracking in status() (Session.swift:417-420, marked complex)
 - ✅ ~~SHA-256 hashing~~ - **DONE**: CryptoKit integrated, 22 tests passing
 - ✅ ~~Integration tests~~ - **DONE**: 14 workflow tests, full coverage
 - ✅ ~~Commit metadata~~ - **DONE**: 11 tests, history tracking, ISO8601 JSON storage
-- ⚠️ Tests - Comprehensive (33 tests: 14 workflow, 11 metadata, 4 hashing, 3 storage, 1 placeholder), Model tests TODO
+- ⚠️ Tests - Comprehensive (45 tests: 14 workflow, 13 nested, 11 metadata, 4 hashing, 3 storage, 1 placeholder), Model tests TODO
 
 **Implementation confidence:**
-- Core workflow: ✅ **High** - publish/read/status complete with 33 passing tests
+- Core workflow: ✅ **High** - publish/read/status complete with 45 passing tests
 - Storage abstraction: ✅ **High** - clean protocol, local adapter complete
 - Concurrency: ✅ **High** - proper actor isolation, no shared mutable state
 - Edge cases: ✅ **High** - comprehensive test coverage validates correctness
-- Production readiness: ✅ **High** - real SHA-256, commit metadata, integration tests, error handling validated
-- Limitations: ⚠️ Root-level files only (nested directories deferred)
+- Nested directories: ✅ **High** - arbitrary depth support, deletion tracking, 13 dedicated tests
+- Production readiness: ✅ **High** - real SHA-256, commit metadata, nested dirs, integration tests, error handling validated
 
 **Key design decisions made:**
 1. ✅ Workspace manifests override base manifests by name

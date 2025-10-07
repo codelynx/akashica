@@ -244,6 +244,26 @@ public actor AkashicaSession {
             return try await storage.readObject(hash: cowRef.hash)
         }
 
+        // Check if file was explicitly deleted by looking at parent directory manifest
+        if let parent = path.parent {
+            if let workspaceManifest = try await storage.readWorkspaceManifest(workspace: workspaceID, path: parent) {
+                // Workspace manifest exists for parent directory
+                let entries = try parseManifest(workspaceManifest)
+                // If file is not in the manifest, it was deleted
+                if !entries.contains(where: { $0.name == path.name! }) {
+                    throw AkashicaError.fileNotFound(path)
+                }
+            }
+        } else {
+            // Root level file - check root manifest
+            if let workspaceManifest = try await storage.readWorkspaceManifest(workspace: workspaceID, path: RepositoryPath(string: "")) {
+                let entries = try parseManifest(workspaceManifest)
+                if !entries.contains(where: { $0.name == path.name! }) {
+                    throw AkashicaError.fileNotFound(path)
+                }
+            }
+        }
+
         // Fall back to base commit
         let metadata = try await storage.readWorkspaceMetadata(workspace: workspaceID)
         return try await readFileFromCommit(metadata.base, path: path)
@@ -295,49 +315,84 @@ public actor AkashicaSession {
         // Read workspace manifest (if exists)
         let workspaceManifestData = try await storage.readWorkspaceManifest(workspace: workspaceID, path: path)
 
-        // Read base commit manifest
+        // If workspace manifest exists, it's the complete source of truth
+        // (it already inherits base entries when first created, and tracks deletions)
+        if let workspaceData = workspaceManifestData {
+            let workspaceEntries = try parseManifest(workspaceData)
+            return workspaceEntries.map { entry in
+                DirectoryEntry(
+                    name: entry.name,
+                    type: entry.isDirectory ? .directory : .file,
+                    size: entry.size,
+                    hash: ContentHash(value: entry.hash)
+                )
+            }.sorted { $0.name < $1.name }
+        }
+
+        // No workspace manifest - return base commit entries
         let metadata = try await storage.readWorkspaceMetadata(workspace: workspaceID)
-        let baseEntries = try await listDirectoryFromCommit(metadata.base, path: path)
-
-        // If no workspace manifest, return base entries
-        guard let workspaceData = workspaceManifestData else {
-            return baseEntries
-        }
-
-        // Parse workspace manifest
-        let workspaceEntries = try parseManifest(workspaceData)
-
-        // Create lookup map from base entries
-        var entriesMap: [String: DirectoryEntry] = [:]
-        for entry in baseEntries {
-            entriesMap[entry.name] = entry
-        }
-
-        // Merge workspace entries (override base)
-        for entry in workspaceEntries {
-            entriesMap[entry.name] = DirectoryEntry(
-                name: entry.name,
-                type: entry.isDirectory ? .directory : .file,
-                size: entry.size,
-                hash: ContentHash(value: entry.hash)
-            )
-        }
-
-        // Return merged entries sorted by name
-        return Array(entriesMap.values).sorted { $0.name < $1.name }
+        return try await listDirectoryFromCommit(metadata.base, path: path)
     }
 
     private func updateWorkspaceManifests(workspace: WorkspaceID, for path: RepositoryPath) async throws {
-        // For now, simple implementation: just update the root manifest
-        // A full implementation would update all parent directories
+        // Update manifests from leaf directory to root (bottom-up)
+        // For path "asia/japan/tokyo.txt":
+        //   1. Update asia/japan/ manifest with tokyo.txt entry
+        //   2. Update asia/ manifest with japan/ entry (using new hash from step 1)
+        //   3. Update root manifest with asia/ entry (using new hash from step 2)
 
-        guard path.components.count == 1 else {
-            // TODO: Handle nested directories
+        let components = path.components
+        guard !components.isEmpty else {
             return
         }
 
+        // Compute file hash/size if file exists, nil if deleted
+        let fileData = try await storage.readWorkspaceFile(workspace: workspace, path: path)
+        var currentHash: String?
+        var currentSize: Int64?
+
+        if let data = fileData {
+            let fileHash = ContentHash(data: data)
+            currentHash = fileHash.value
+            currentSize = Int64(data.count)
+        } else {
+            currentHash = nil
+            currentSize = nil
+        }
+
+        // Update all parent directories from leaf to root
+        for depth in (0..<components.count).reversed() {
+            let dirPath = depth == 0 ? RepositoryPath(string: "") : RepositoryPath(components: Array(components[0..<depth]))
+            let entryName = components[depth]
+
+            // Update manifest at this directory level
+            let (hash, size) = try await updateSingleDirectoryManifest(
+                workspace: workspace,
+                dirPath: dirPath,
+                entryName: entryName,
+                isFile: depth == components.count - 1,  // true if this is the immediate parent of the file
+                childHash: currentHash,
+                childSize: currentSize
+            )
+
+            // Store for next level up
+            currentHash = hash
+            currentSize = size
+        }
+    }
+
+    /// Update a single directory's manifest with one entry change
+    /// Returns the (hash, size) of the updated manifest for parent directory to use
+    private func updateSingleDirectoryManifest(
+        workspace: WorkspaceID,
+        dirPath: RepositoryPath,
+        entryName: String,
+        isFile: Bool,
+        childHash: String?,
+        childSize: Int64?
+    ) async throws -> (hash: String, size: Int64) {
         // Read current workspace manifest (if exists)
-        let existingData = try await storage.readWorkspaceManifest(workspace: workspace, path: RepositoryPath(string: ""))
+        let existingData = try await storage.readWorkspaceManifest(workspace: workspace, path: dirPath)
 
         // Parse existing entries
         var entries: [String: (hash: String, size: Int64, isDirectory: Bool)] = [:]
@@ -350,7 +405,7 @@ public actor AkashicaSession {
             // No workspace manifest exists yet - inherit all files from base commit
             let metadata = try await storage.readWorkspaceMetadata(workspace: workspace)
             do {
-                let baseEntries = try await listDirectoryFromCommit(metadata.base, path: RepositoryPath(string: ""))
+                let baseEntries = try await listDirectoryFromCommit(metadata.base, path: dirPath)
                 for entry in baseEntries {
                     entries[entry.name] = (hash: entry.hash.value, size: entry.size, isDirectory: entry.type == .directory)
                 }
@@ -359,17 +414,16 @@ public actor AkashicaSession {
             }
         }
 
-        // Check if file exists in workspace
-        if let fileData = try await storage.readWorkspaceFile(workspace: workspace, path: path) {
-            // File exists, compute hash and update entry
-            let hash = ContentHash(data: fileData)
-            entries[path.name!] = (hash: hash.value, size: Int64(fileData.count), isDirectory: false)
+        // Update or remove the entry
+        if let hash = childHash, let size = childSize {
+            // Entry exists (file or directory)
+            entries[entryName] = (hash: hash, size: size, isDirectory: !isFile)
         } else {
-            // File doesn't exist, remove from manifest
-            entries.removeValue(forKey: path.name!)
+            // Entry was deleted
+            entries.removeValue(forKey: entryName)
         }
 
-        // Build new manifest (even if empty, to mark that we've made changes)
+        // Build new manifest
         let manifestLines = entries.map { name, info in
             let displayName = info.isDirectory ? "\(name)/" : name
             return "\(info.hash):\(info.size):\(displayName)"
@@ -377,7 +431,13 @@ public actor AkashicaSession {
 
         let manifestContent = manifestLines.isEmpty ? "" : manifestLines.joined(separator: "\n")
         let manifestData = manifestContent.data(using: .utf8)!
-        try await storage.writeWorkspaceManifest(workspace: workspace, path: RepositoryPath(string: ""), data: manifestData)
+
+        // Write manifest to workspace
+        try await storage.writeWorkspaceManifest(workspace: workspace, path: dirPath, data: manifestData)
+
+        // Return hash and size for parent directory
+        let manifestHash = ContentHash(data: manifestData)
+        return (manifestHash.value, Int64(manifestData.count))
     }
 
     /// Recursively collect changes between workspace and base commit
