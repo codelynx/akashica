@@ -361,6 +361,14 @@ akashica/
 
 Akashica includes a command-line interface for repository management using the **aka:// URI scheme** for explicit path addressing.
 
+**📖 For comprehensive documentation, see the [CLI Guide](docs/CLI_GUIDE.md)** - a complete guide for technical directors and content management teams covering:
+- What Akashica is and why you need it
+- Storage configuration (local and S3)
+- Understanding the two-tier model
+- URI scheme and explicit addressing
+- Common workflows and best practices
+- Troubleshooting and FAQ
+
 ### URI Scheme
 
 All file paths use `aka://` URIs to specify exactly where content should be read from or written to:
@@ -431,16 +439,20 @@ akashica diff aka:/file.txt                # Show changes for specific file
 
 See [docs/URI_SCHEME.md](docs/URI_SCHEME.md) for complete URI specification.
 
-## Design Documents
+## Documentation
 
-Detailed design documentation is available in the `docs/` directory:
+Comprehensive documentation is available in the `docs/` directory:
 
-- **design.md** - Core architecture and storage format
-- **two-tier-commit.md** - Dual-tier workspace model
-- **WORKSPACE_DESIGN_SUMMARY.md** - Workspace implementation details
-- **API_IMPLEMENTATION_SUMMARY.md** - Current implementation status
-- **URI_SCHEME.md** - aka:// URI specification and examples
-- **ARCHITECTURE.md** - Session-first CLI architecture
+**For Users:**
+- **[CLI_GUIDE.md](docs/CLI_GUIDE.md)** - Complete guide for technical directors and content teams (start here!)
+- **[URI_SCHEME.md](docs/URI_SCHEME.md)** - aka:// URI specification and examples
+
+**For Developers:**
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Session-first CLI architecture
+- **[API_IMPLEMENTATION_SUMMARY.md](docs/API_IMPLEMENTATION_SUMMARY.md)** - Library API reference
+- **[design.md](docs/design.md)** - Core architecture and storage format
+- **[two-tier-commit.md](docs/two-tier-commit.md)** - Dual-tier workspace model
+- **[WORKSPACE_DESIGN_SUMMARY.md](docs/WORKSPACE_DESIGN_SUMMARY.md)** - Workspace implementation
 
 ## Use Cases
 
