@@ -119,17 +119,30 @@ public actor AkashicaSession {
     /// Get status of workspace
     /// - Throws: AkashicaError.sessionReadOnly if session is on a commit
     public func status() async throws -> WorkspaceStatus {
-        guard case .workspace = changeset else {
+        guard case .workspace(let workspaceID) = changeset else {
             throw AkashicaError.sessionReadOnly
         }
 
-        // TODO: Implement workspace status
-        // Compare workspace manifests with base commit
+        var modified: [RepositoryPath] = []
+        var added: [RepositoryPath] = []
+        var deleted: [RepositoryPath] = []
+        var renamed: [(from: RepositoryPath, to: RepositoryPath)] = []
+
+        // Recursively walk workspace tree and compare with base
+        try await collectChanges(
+            workspace: workspaceID,
+            path: RepositoryPath(string: ""),
+            modified: &modified,
+            added: &added,
+            deleted: &deleted,
+            renamed: &renamed
+        )
+
         return WorkspaceStatus(
-            modified: [],
-            added: [],
-            deleted: [],
-            renamed: []
+            modified: modified,
+            added: added,
+            deleted: deleted,
+            renamed: renamed
         )
     }
 
@@ -232,18 +245,207 @@ public actor AkashicaSession {
     }
 
     private func listDirectoryFromCommit(_ commitID: CommitID, path: RepositoryPath) async throws -> [DirectoryEntry] {
-        // TODO: Implement commit directory listing
-        fatalError("Not implemented yet")
+        // Read root manifest
+        let rootData = try await storage.readRootManifest(commit: commitID)
+
+        var currentManifestData = rootData
+        var currentPath = path.components
+
+        // Traverse to the target directory
+        while !currentPath.isEmpty {
+            let component = currentPath.removeFirst()
+
+            // Parse current manifest
+            let entries = try parseManifest(currentManifestData)
+
+            // Find entry for this component
+            guard let entry = entries.first(where: { $0.name == component }) else {
+                throw AkashicaError.fileNotFound(path)
+            }
+
+            // This should be a directory
+            if !entry.isDirectory {
+                throw AkashicaError.fileNotFound(path) // Expected directory, got file
+            }
+
+            // Read next manifest
+            currentManifestData = try await storage.readManifest(hash: ContentHash(value: entry.hash))
+        }
+
+        // Parse the target directory manifest
+        let entries = try parseManifest(currentManifestData)
+
+        // Convert to DirectoryEntry
+        return entries.map { entry in
+            DirectoryEntry(
+                name: entry.name,
+                type: entry.isDirectory ? .directory : .file,
+                size: entry.size,
+                hash: ContentHash(value: entry.hash)
+            )
+        }
     }
 
     private func listDirectoryFromWorkspace(_ workspaceID: WorkspaceID, path: RepositoryPath) async throws -> [DirectoryEntry] {
-        // TODO: Implement workspace directory listing
-        // Merge workspace manifest with base commit manifest
-        fatalError("Not implemented yet")
+        // Read workspace manifest (if exists)
+        let workspaceManifestData = try await storage.readWorkspaceManifest(workspace: workspaceID, path: path)
+
+        // Read base commit manifest
+        let metadata = try await storage.readWorkspaceMetadata(workspace: workspaceID)
+        let baseEntries = try await listDirectoryFromCommit(metadata.base, path: path)
+
+        // If no workspace manifest, return base entries
+        guard let workspaceData = workspaceManifestData else {
+            return baseEntries
+        }
+
+        // Parse workspace manifest
+        let workspaceEntries = try parseManifest(workspaceData)
+
+        // Create lookup map from base entries
+        var entriesMap: [String: DirectoryEntry] = [:]
+        for entry in baseEntries {
+            entriesMap[entry.name] = entry
+        }
+
+        // Merge workspace entries (override base)
+        for entry in workspaceEntries {
+            entriesMap[entry.name] = DirectoryEntry(
+                name: entry.name,
+                type: entry.isDirectory ? .directory : .file,
+                size: entry.size,
+                hash: ContentHash(value: entry.hash)
+            )
+        }
+
+        // Return merged entries sorted by name
+        return Array(entriesMap.values).sorted { $0.name < $1.name }
     }
 
     private func updateWorkspaceManifests(workspace: WorkspaceID, for path: RepositoryPath) async throws {
         // TODO: Update .dir manifests for all parent directories
         // This ensures the directory tree is consistent
+    }
+
+    /// Recursively collect changes between workspace and base commit
+    private func collectChanges(
+        workspace: WorkspaceID,
+        path: RepositoryPath,
+        modified: inout [RepositoryPath],
+        added: inout [RepositoryPath],
+        deleted: inout [RepositoryPath],
+        renamed: inout [(from: RepositoryPath, to: RepositoryPath)]
+    ) async throws {
+        // Get workspace manifest (if exists)
+        let workspaceManifestData = try await storage.readWorkspaceManifest(workspace: workspace, path: path)
+
+        // Get base commit manifest
+        let metadata = try await storage.readWorkspaceMetadata(workspace: workspace)
+        let baseEntries: [DirectoryEntry]
+        do {
+            baseEntries = try await listDirectoryFromCommit(metadata.base, path: path)
+        } catch AkashicaError.fileNotFound {
+            // Directory doesn't exist in base, all workspace files are added
+            if let workspaceData = workspaceManifestData {
+                let entries = try parseManifest(workspaceData)
+                for entry in entries {
+                    let filePath = path.components.isEmpty
+                        ? RepositoryPath(string: entry.name)
+                        : RepositoryPath(components: path.components + [entry.name])
+                    if entry.isDirectory {
+                        try await collectChanges(
+                            workspace: workspace,
+                            path: filePath,
+                            modified: &modified,
+                            added: &added,
+                            deleted: &deleted,
+                            renamed: &renamed
+                        )
+                    } else {
+                        added.append(filePath)
+                    }
+                }
+            }
+            return
+        }
+
+        // Create lookup maps
+        var baseMap: [String: DirectoryEntry] = [:]
+        for entry in baseEntries {
+            baseMap[entry.name] = entry
+        }
+
+        var workspaceMap: [String: (hash: String, size: Int64, isDirectory: Bool)] = [:]
+        if let workspaceData = workspaceManifestData {
+            let entries = try parseManifest(workspaceData)
+            for entry in entries {
+                workspaceMap[entry.name] = (hash: entry.hash, size: entry.size, isDirectory: entry.isDirectory)
+            }
+        }
+
+        // Check for modifications, additions, and deletions
+        var processedNames = Set<String>()
+
+        // Process workspace entries
+        for (name, workspaceEntry) in workspaceMap {
+            processedNames.insert(name)
+            let filePath = path.components.isEmpty
+                ? RepositoryPath(string: name)
+                : RepositoryPath(components: path.components + [name])
+
+            if let baseEntry = baseMap[name] {
+                // File exists in both - check if modified
+                if workspaceEntry.hash != baseEntry.hash.value {
+                    if !workspaceEntry.isDirectory {
+                        modified.append(filePath)
+                    }
+                }
+                // Recurse into directories
+                if workspaceEntry.isDirectory {
+                    try await collectChanges(
+                        workspace: workspace,
+                        path: filePath,
+                        modified: &modified,
+                        added: &added,
+                        deleted: &deleted,
+                        renamed: &renamed
+                    )
+                }
+            } else {
+                // File exists in workspace but not in base
+                // Check if it's a COW reference (potential rename)
+                if try await storage.readCOWReference(workspace: workspace, path: filePath) != nil {
+                    // This is a renamed file - find original
+                    // For now, just mark as added (rename detection is complex)
+                    added.append(filePath)
+                } else {
+                    // New file
+                    if workspaceEntry.isDirectory {
+                        try await collectChanges(
+                            workspace: workspace,
+                            path: filePath,
+                            modified: &modified,
+                            added: &added,
+                            deleted: &deleted,
+                            renamed: &renamed
+                        )
+                    } else {
+                        added.append(filePath)
+                    }
+                }
+            }
+        }
+
+        // Process base entries not in workspace (deletions)
+        for (name, baseEntry) in baseMap {
+            if !processedNames.contains(name) {
+                let filePath = path.components.isEmpty
+                    ? RepositoryPath(string: name)
+                    : RepositoryPath(components: path.components + [name])
+                if baseEntry.type == .file {
+                    deleted.append(filePath)
+                }
+            }
+        }
     }
 }

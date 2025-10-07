@@ -1,3 +1,5 @@
 // Placeholder file for AkashicaCore module
-// This module will contain internal utilities like SHA-256 hashing,
-// manifest parsing, and COW reference handling.
+//
+// ✅ Implemented: ManifestParser, ManifestBuilder (in Manifests/)
+// ⚠️ TODO: Real SHA-256 hashing (replace ContentHash placeholder with CryptoKit)
+// ⚠️ TODO: COW reference utilities (if needed beyond storage adapter)
