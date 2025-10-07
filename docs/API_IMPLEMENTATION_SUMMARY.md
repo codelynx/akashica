@@ -332,9 +332,11 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ Workflow integration tests (14 tests, end-to-end scenarios)
    - ✅ Commit metadata tests (11 tests, storage, history, serialization)
    - ✅ Nested directory tests (13 tests, deep nesting, deletions, publish)
+   - ✅ RepositoryPath tests (38 tests, parsing, operations, edge cases)
+   - ✅ Model Codable tests (22 tests, JSON serialization, all models)
+   - ✅ Model Equality tests (22 tests, Hashable, Set/Dictionary usage)
    - ✅ Placeholder test (1 test, AkashicaCore)
-   - **Total: 45 tests passing**
-   - ⚠️ TODO: Model tests (Codable, path operations)
+   - **Total: 127 tests passing**
 
 6. ✅ ~~**Commit metadata storage**~~ **DONE**
    - ✅ CommitMetadata model with message, author, timestamp, parent
@@ -485,6 +487,9 @@ Tests/
     CommitMetadataTests.swift                    # Metadata storage & history (11 tests)
     WorkflowIntegrationTests.swift               # End-to-end workflows (14 tests)
     NestedDirectoryTests.swift                   # Nested directory operations (13 tests)
+    RepositoryPathTests.swift                    # Path parsing & operations (38 tests)
+    ModelCodableTests.swift                      # JSON serialization (22 tests)
+    ModelEqualityTests.swift                     # Hashable & equality (22 tests)
   AkashicaStorageTests/
     HashDeduplicationTests.swift                 # Storage integration (3 tests)
   AkashicaCoreTests/
@@ -554,15 +559,16 @@ Build complete! (0.10s)
 - ✅ ~~SHA-256 hashing~~ - **DONE**: CryptoKit integrated, 22 tests passing
 - ✅ ~~Integration tests~~ - **DONE**: 14 workflow tests, full coverage
 - ✅ ~~Commit metadata~~ - **DONE**: 11 tests, history tracking, ISO8601 JSON storage
-- ⚠️ Tests - Comprehensive (45 tests: 14 workflow, 13 nested, 11 metadata, 4 hashing, 3 storage, 1 placeholder), Model tests TODO
+- ✅ ~~Model unit tests~~ - **DONE**: 82 tests (38 RepositoryPath, 22 Codable, 22 Equality)
 
 **Implementation confidence:**
-- Core workflow: ✅ **High** - publish/read/status complete with 45 passing tests
+- Core workflow: ✅ **High** - publish/read/status complete with 127 passing tests
 - Storage abstraction: ✅ **High** - clean protocol, local adapter complete
 - Concurrency: ✅ **High** - proper actor isolation, no shared mutable state
 - Edge cases: ✅ **High** - comprehensive test coverage validates correctness
+- Model layer: ✅ **High** - 82 unit tests covering parsing, serialization, equality
 - Nested directories: ✅ **High** - arbitrary depth support, deletion tracking, 13 dedicated tests
-- Production readiness: ✅ **High** - real SHA-256, commit metadata, nested dirs, integration tests, error handling validated
+- Production readiness: ✅ **High** - real SHA-256, commit metadata, nested dirs, model validation, error handling
 
 **Key design decisions made:**
 1. ✅ Workspace manifests override base manifests by name
