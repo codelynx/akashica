@@ -449,6 +449,7 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[URI_SCHEME.md](docs/URI_SCHEME.md)** - aka:// URI specification and examples
 
 **For Developers:**
+- **[PROGRAMMING_GUIDE.md](docs/PROGRAMMING_GUIDE.md)** - Complete Swift developer guide for integrating Akashica (start here!)
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Session-first CLI architecture
 - **[API_IMPLEMENTATION_SUMMARY.md](docs/API_IMPLEMENTATION_SUMMARY.md)** - Library API reference
 - **[design.md](docs/design.md)** - Core architecture and storage format
