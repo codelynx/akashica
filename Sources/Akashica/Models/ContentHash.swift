@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Content hash (SHA-256, 64 hex characters)
 public struct ContentHash: Hashable, Codable, Sendable {
@@ -8,15 +9,14 @@ public struct ContentHash: Hashable, Codable, Sendable {
         self.value = value
     }
 
-    /// Create hash from data
+    /// Create hash from data using SHA-256
     public init(data: Data) {
         self.value = Self.sha256(data: data)
     }
 
     private static func sha256(data: Data) -> String {
-        // TODO: Implement SHA-256 hashing
-        // For now, placeholder implementation
-        data.base64EncodedString()
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 

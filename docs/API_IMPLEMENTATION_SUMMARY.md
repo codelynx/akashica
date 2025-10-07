@@ -287,16 +287,21 @@ let original = try await sessionC.readFile(at: "file.txt")
 1. **Workspace manifest updates** (Session.swift)
    - `updateWorkspaceManifests`: Update `.dir` manifests for parent directories after file operations
 
-2. **SHA-256 hashing** (AkashicaCore)
-   - Replace `ContentHash.sha256()` placeholder with real CryptoKit implementation
+2. ✅ ~~**SHA-256 hashing** (AkashicaCore)~~ **DONE**
+   - ✅ Integrated CryptoKit for real SHA-256 hashing
+   - ✅ 64-character hex output verified
+   - ✅ Hash deduplication tested
 
 3. **Diff implementation** (Session.swift)
    - `diff(against:)`: Compare this changeset against another commit
 
-4. **Tests** (Tests/)
-   - Unit tests for models (Codable, path operations)
-   - Integration tests for full workflows
-   - Storage adapter tests
+4. **Tests** (Tests/) - Partially done
+   - ✅ ContentHash tests (4 tests, SHA-256 verification)
+   - ✅ Hash deduplication tests (3 tests, storage integration)
+   - ✅ Placeholder test (1 test, AkashicaCore)
+   - **Total: 8 tests passing**
+   - ⚠️ TODO: Integration tests for full workflows (create → edit → publish)
+   - ⚠️ TODO: Model tests (Codable, path operations)
 
 ---
 
@@ -422,12 +427,18 @@ Sources/AkashicaStorage/
     LocalStorageAdapter.swift                    # Filesystem implementation
 
 Sources/AkashicaCore/
-  Placeholder.swift                              # TODO: Manifest parsing, SHA-256
+  Manifests/
+    ManifestParser.swift                         # Parse directory manifests
+    ManifestBuilder.swift                        # Build directory manifests
+  Placeholder.swift                              # Status tracking
 
 Tests/
-  AkashicaTests/PlaceholderTests.swift          # TODO: API tests
-  AkashicaStorageTests/PlaceholderTests.swift   # TODO: Storage tests
-  AkashicaCoreTests/PlaceholderTests.swift      # TODO: Core utilities tests
+  AkashicaTests/
+    PlaceholderTests.swift                       # ContentHash tests (4 tests)
+  AkashicaStorageTests/
+    HashDeduplicationTests.swift                 # Storage integration (3 tests)
+  AkashicaCoreTests/
+    PlaceholderTests.swift                       # Core utilities (1 test)
 ```
 
 ---
@@ -489,8 +500,8 @@ Build complete! (0.10s)
 - ⚠️ `updateWorkspaceManifests()` - Parent directory updates after file ops (Session.swift:325, marked TODO)
 - ⚠️ `diff(against:)` - Cross-commit comparison (Session.swift:149, stub exists)
 - ⚠️ **Rename detection** - COW-based rename tracking in status() (Session.swift:417-420, marked complex)
-- ⚠️ SHA-256 hashing - Using placeholder ContentHash (needs CryptoKit integration)
-- ⚠️ Tests - No test coverage yet (critical for complex publish/status logic)
+- ✅ ~~SHA-256 hashing~~ - **DONE**: CryptoKit integrated, 8 tests passing
+- ⚠️ Tests - Partial coverage (8 tests: 4 hashing, 3 storage, 1 placeholder), need workflow integration tests
 - ⚠️ Commit metadata - Message parameter unused in `publishWorkspace` (Repository.swift:84)
 
 **Implementation confidence:**
