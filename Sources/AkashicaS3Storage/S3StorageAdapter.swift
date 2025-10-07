@@ -7,16 +7,19 @@ import AWSClientRuntime
 
 /// S3-backed storage adapter for Akashica
 ///
-/// Storage layout in S3:
-/// - objects/<hash>                         - Content-addressed objects
-/// - manifests/<hash>                       - Content-addressed manifests
-/// - commits/<commitID>/root-manifest       - Commit root manifests
-/// - commits/<commitID>/metadata.json       - Commit metadata
-/// - branches/<name>                        - Branch pointers (JSON)
-/// - workspaces/<workspaceID>/metadata.json - Workspace metadata
-/// - workspaces/<workspaceID>/files/<path>  - Workspace files
-/// - workspaces/<workspaceID>/manifests/<path> - Workspace manifests
-/// - workspaces/<workspaceID>/cow/<path>    - COW references
+/// Storage layout in S3 (with sharding):
+/// - objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.dat  - Content-addressed objects
+/// - objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.dir  - Content-addressed manifests
+/// - objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.tomb - Tombstone files
+/// - commits/<commitID>/root-manifest                - Commit root manifests
+/// - commits/<commitID>/metadata.json                - Commit metadata
+/// - branches/<name>                                 - Branch pointers (JSON)
+/// - workspaces/<workspaceID>/metadata.json          - Workspace metadata
+/// - workspaces/<workspaceID>/files/<path>           - Workspace files
+/// - workspaces/<workspaceID>/manifests/<path>       - Workspace manifests
+/// - workspaces/<workspaceID>/cow/<path>             - COW references
+///
+/// Sharding provides 65,536 buckets (4 hex chars), scaling to petabytes while maintaining manageable directory sizes.
 ///
 /// Optional keyPrefix for test isolation:
 /// - When provided, all keys are prefixed with "test-runs/<prefix>/"
@@ -42,11 +45,28 @@ public actor S3StorageAdapter: StorageAdapter {
         keyPrefix + path
     }
 
+    /// Generate sharded key from content hash
+    /// Format: objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.{ext}
+    /// Example: a3f2b8d9... → objects/a3/f2/b8d9c1e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9.dat
+    private func shardedObjectKey(hash: ContentHash, extension ext: String) -> String {
+        let hashValue = hash.value
+        guard hashValue.count >= 4 else {
+            // Fallback for short hashes (shouldn't happen with SHA256)
+            return prefixedKey("objects/\(hashValue).\(ext)")
+        }
+
+        let firstTwo = String(hashValue.prefix(2))
+        let nextTwo = String(hashValue.dropFirst(2).prefix(2))
+        let remaining = String(hashValue.dropFirst(4))
+
+        return prefixedKey("objects/\(firstTwo)/\(nextTwo)/\(remaining).\(ext)")
+    }
+
     // MARK: - Content-Addressed Storage (Objects & Manifests)
 
     public func readObject(hash: ContentHash) async throws -> Data {
-        let tombstoneKey = prefixedKey("objects/\(hash.value).tomb")
-        let objectKey = prefixedKey("objects/\(hash.value)")
+        let tombstoneKey = shardedObjectKey(hash: hash, extension: "tomb")
+        let objectKey = shardedObjectKey(hash: hash, extension: "dat")
 
         // Check for tombstone first
         do {
@@ -64,13 +84,13 @@ public actor S3StorageAdapter: StorageAdapter {
 
     public func writeObject(data: Data) async throws -> ContentHash {
         let hash = ContentHash(data: data)
-        let key = prefixedKey("objects/\(hash.value)")
+        let key = shardedObjectKey(hash: hash, extension: "dat")
         try await putObject(key: key, data: data)
         return hash
     }
 
     public func objectExists(hash: ContentHash) async throws -> Bool {
-        let key = prefixedKey("objects/\(hash.value)")
+        let key = shardedObjectKey(hash: hash, extension: "dat")
         let input = HeadObjectInput(bucket: bucket, key: key)
         do {
             _ = try await client.headObject(input: input)
@@ -81,13 +101,13 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func readManifest(hash: ContentHash) async throws -> Data {
-        let key = prefixedKey("manifests/\(hash.value)")
+        let key = shardedObjectKey(hash: hash, extension: "dir")
         return try await getObject(key: key)
     }
 
     public func writeManifest(data: Data) async throws -> ContentHash {
         let hash = ContentHash(data: data)
-        let key = prefixedKey("manifests/\(hash.value)")
+        let key = shardedObjectKey(hash: hash, extension: "dir")
         try await putObject(key: key, data: data)
         return hash
     }
@@ -353,13 +373,13 @@ public actor S3StorageAdapter: StorageAdapter {
     // MARK: - Tombstone Operations
 
     public func deleteObject(hash: ContentHash) async throws {
-        let key = prefixedKey("objects/\(hash.value)")
+        let key = shardedObjectKey(hash: hash, extension: "dat")
         let input = DeleteObjectInput(bucket: bucket, key: key)
         _ = try await client.deleteObject(input: input)
     }
 
     public func readTombstone(hash: ContentHash) async throws -> Tombstone? {
-        let key = prefixedKey("objects/\(hash.value).tomb")
+        let key = shardedObjectKey(hash: hash, extension: "tomb")
 
         do {
             let data = try await getObject(key: key)
@@ -372,7 +392,7 @@ public actor S3StorageAdapter: StorageAdapter {
     }
 
     public func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws {
-        let key = prefixedKey("objects/\(hash.value).tomb")
+        let key = shardedObjectKey(hash: hash, extension: "tomb")
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -399,11 +419,19 @@ public actor S3StorageAdapter: StorageAdapter {
                 guard let key = object.key,
                       key.hasSuffix(".tomb") else { return nil }
 
-                // Extract hash from "test-runs/<uuid>/objects/<hash>.tomb" or "objects/<hash>.tomb"
-                let hashValue = key
-                    .dropFirst(prefix.count)  // Remove prefix
-                    .dropLast(5)              // Remove ".tomb"
-                return ContentHash(value: String(hashValue))
+                // Extract hash from sharded path
+                // Path: "objects/a3/f2/b8d9c1e4...f9.tomb" or "test-runs/<uuid>/objects/a3/f2/b8d9c1e4...f9.tomb"
+                // Hash: a3f2b8d9c1e4...f9
+                let pathWithoutPrefix = key.dropFirst(prefix.count)
+                let components = pathWithoutPrefix.split(separator: "/")
+
+                guard components.count == 3 else { return nil }
+                let firstTwo = components[0]
+                let nextTwo = components[1]
+                let fileName = components[2].dropLast(5) // Remove ".tomb"
+
+                let hashValue = String(firstTwo) + String(nextTwo) + String(fileName)
+                return ContentHash(value: hashValue)
             }
             tombstones.append(contentsOf: page)
 

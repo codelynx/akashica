@@ -15,6 +15,26 @@ public struct LocalStorageAdapter: StorageAdapter {
         rootPath.appendingPathComponent("objects")
     }
 
+    /// Generate sharded path from content hash
+    /// Format: objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.{ext}
+    /// Example: a3f2b8d9... → objects/a3/f2/b8d9c1e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9.dat
+    private func shardedObjectPath(hash: ContentHash, extension ext: String) -> URL {
+        let hashValue = hash.value
+        guard hashValue.count >= 4 else {
+            // Fallback for short hashes (shouldn't happen with SHA256)
+            return objectsPath().appendingPathComponent("\(hashValue).\(ext)")
+        }
+
+        let firstTwo = String(hashValue.prefix(2))
+        let nextTwo = String(hashValue.dropFirst(2).prefix(2))
+        let remaining = String(hashValue.dropFirst(4))
+
+        return objectsPath()
+            .appendingPathComponent(firstTwo)
+            .appendingPathComponent(nextTwo)
+            .appendingPathComponent("\(remaining).\(ext)")
+    }
+
     private func branchesPath() -> URL {
         rootPath.appendingPathComponent("branches")
     }
@@ -34,8 +54,8 @@ public struct LocalStorageAdapter: StorageAdapter {
     // MARK: - Object Operations
 
     public func readObject(hash: ContentHash) async throws -> Data {
-        let tombstonePath = objectsPath().appendingPathComponent("\(hash.value).tomb")
-        let objectPath = objectsPath().appendingPathComponent("\(hash.value).dat")
+        let tombstonePath = shardedObjectPath(hash: hash, extension: "tomb")
+        let objectPath = shardedObjectPath(hash: hash, extension: "dat")
 
         // Check for tombstone first
         if FileManager.default.fileExists(atPath: tombstonePath.path) {
@@ -56,11 +76,11 @@ public struct LocalStorageAdapter: StorageAdapter {
 
     public func writeObject(data: Data) async throws -> ContentHash {
         let hash = ContentHash(data: data)
-        let path = objectsPath().appendingPathComponent("\(hash.value).dat")
+        let path = shardedObjectPath(hash: hash, extension: "dat")
 
-        // Create objects directory if needed
+        // Create sharded directory structure if needed
         try FileManager.default.createDirectory(
-            at: objectsPath(),
+            at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
 
@@ -69,23 +89,23 @@ public struct LocalStorageAdapter: StorageAdapter {
     }
 
     public func objectExists(hash: ContentHash) async throws -> Bool {
-        let path = objectsPath().appendingPathComponent("\(hash.value).dat")
+        let path = shardedObjectPath(hash: hash, extension: "dat")
         return FileManager.default.fileExists(atPath: path.path)
     }
 
     // MARK: - Manifest Operations
 
     public func readManifest(hash: ContentHash) async throws -> Data {
-        let path = objectsPath().appendingPathComponent("\(hash.value).dir")
+        let path = shardedObjectPath(hash: hash, extension: "dir")
         return try Data(contentsOf: path)
     }
 
     public func writeManifest(data: Data) async throws -> ContentHash {
         let hash = ContentHash(data: data)
-        let path = objectsPath().appendingPathComponent("\(hash.value).dir")
+        let path = shardedObjectPath(hash: hash, extension: "dir")
 
         try FileManager.default.createDirectory(
-            at: objectsPath(),
+            at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
 
@@ -334,7 +354,7 @@ public struct LocalStorageAdapter: StorageAdapter {
     // MARK: - Tombstone Operations
 
     public func deleteObject(hash: ContentHash) async throws {
-        let path = objectsPath().appendingPathComponent("\(hash.value).dat")
+        let path = shardedObjectPath(hash: hash, extension: "dat")
         guard FileManager.default.fileExists(atPath: path.path) else {
             throw AkashicaError.fileNotFound(RepositoryPath(string: hash.value))
         }
@@ -342,7 +362,7 @@ public struct LocalStorageAdapter: StorageAdapter {
     }
 
     public func readTombstone(hash: ContentHash) async throws -> Tombstone? {
-        let path = objectsPath().appendingPathComponent("\(hash.value).tomb")
+        let path = shardedObjectPath(hash: hash, extension: "tomb")
 
         guard FileManager.default.fileExists(atPath: path.path) else {
             return nil
@@ -355,11 +375,11 @@ public struct LocalStorageAdapter: StorageAdapter {
     }
 
     public func writeTombstone(hash: ContentHash, tombstone: Tombstone) async throws {
-        let path = objectsPath().appendingPathComponent("\(hash.value).tomb")
+        let path = shardedObjectPath(hash: hash, extension: "tomb")
 
-        // Create objects directory if needed
+        // Create sharded directory structure if needed
         try FileManager.default.createDirectory(
-            at: objectsPath(),
+            at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
 
@@ -377,15 +397,29 @@ public struct LocalStorageAdapter: StorageAdapter {
             return []
         }
 
-        let contents = try FileManager.default.contentsOfDirectory(
+        var tombstones: [ContentHash] = []
+
+        // Traverse sharded directory structure: objects/a3/f2/*.tomb
+        let enumerator = FileManager.default.enumerator(
             at: objectsDir,
-            includingPropertiesForKeys: nil
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
         )
 
-        return contents.compactMap { url in
-            guard url.pathExtension == "tomb" else { return nil }
-            let hashValue = url.deletingPathExtension().lastPathComponent
-            return ContentHash(value: hashValue)
+        while let fileURL = enumerator?.nextObject() as? URL {
+            guard fileURL.pathExtension == "tomb" else { continue }
+
+            // Reconstruct hash from sharded path
+            // Path: objects/a3/f2/b8d9c1e4...f9.tomb
+            // Hash: a3f2b8d9c1e4...f9
+            let fileName = fileURL.deletingPathExtension().lastPathComponent
+            let parent1 = fileURL.deletingLastPathComponent().lastPathComponent
+            let parent2 = fileURL.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+
+            let hashValue = parent2 + parent1 + fileName
+            tombstones.append(ContentHash(value: hashValue))
         }
+
+        return tombstones
     }
 }

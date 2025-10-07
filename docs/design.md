@@ -39,12 +39,13 @@
 - **Directory Manifest (`.dir`)**
   - Newline-delimited entries: `{hash}:{size}:{name}`; directories (including the repository root) are suffixed `/` and point to child manifest hashes.
   - The size field enables O(1) computation of total directory size by summing all entries, supporting instant progress tracking and quota checks without traversing objects.
-- **Object Store (sharded by hash prefix)**
+- **Object Store (sharded by hash prefix)** ✅ IMPLEMENTED
   - Path format: `objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.{ext}` where hash is the full SHA256 hex string.
-  - Payload files carry extensions: `.dat` for binary payloads, `.dir` for directory manifests.
+  - Payload files carry extensions: `.dat` for binary payloads, `.dir` for directory manifests, `.tomb` for tombstones.
   - Example: SHA256 `a3f2b8d9...` → `objects/a3/f2/b8d9c1e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9.dat`
   - Sharding provides 65,536 buckets (4 hex chars), scaling to petabytes while maintaining manageable directory sizes.
   - Works uniformly for both S3 (key prefixes) and local filesystem (nested directories).
+  - Implementation: Both `LocalStorageAdapter` and `S3StorageAdapter` use sharded paths for all objects, manifests, and tombstones (v0.8.0).
 - **Index Tables** (optional)
   - Secondary indexes for search/tagging stored in metadata service or external databases.
 - **Repository Format Version**
