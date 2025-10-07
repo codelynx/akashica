@@ -361,7 +361,7 @@ akashica/
 
 Akashica includes a command-line interface for repository management using the **aka:// URI scheme** for explicit path addressing.
 
-**📖 For comprehensive documentation, see the [CLI Guide](docs/CLI_GUIDE.md)** - a complete guide for technical directors and content management teams covering:
+**📖 For comprehensive documentation, see the [CLI User Guide](docs/CLI_USER_GUIDE.md)** - a complete guide for technical directors and content management teams covering:
 - What Akashica is and why you need it
 - Storage configuration (local and S3)
 - Understanding the two-tier model
@@ -444,7 +444,7 @@ See [docs/URI_SCHEME.md](docs/URI_SCHEME.md) for complete URI specification.
 Comprehensive documentation is available in the `docs/` directory:
 
 **For Users:**
-- **[CLI_GUIDE.md](docs/CLI_GUIDE.md)** - Complete guide for technical directors and content teams (start here!)
+- **[CLI_USER_GUIDE.md](docs/CLI_USER_GUIDE.md)** - Complete guide for technical directors and content teams (start here!)
 - **[URI_SCHEME.md](docs/URI_SCHEME.md)** - aka:// URI specification and examples
 
 **For Developers:**

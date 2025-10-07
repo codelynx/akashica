@@ -1,4 +1,4 @@
-# Akashica CLI Guide
+# Akashica CLI User Guide
 
 A comprehensive guide for technical directors and content management teams.
 
@@ -244,10 +244,9 @@ Create an IAM policy with these minimum permissions:
 # Set AWS credentials
 export AWS_ACCESS_KEY_ID=your_access_key
 export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_REGION=us-east-1
 
 # Initialize with S3 backend
-akashica init --s3-bucket my-content-repo
+akashica init --s3-bucket my-content-repo --s3-region us-east-1
 ```
 
 **Step 4: Verify setup**
@@ -1425,6 +1424,11 @@ akashica cp . aka:/// --recursive
 akashica commit -m "Initial import of existing content"
 ```
 
+**Note for large migrations**: If migrating many files or large files (GB+), consider:
+- Copying in batches (by directory) to monitor progress
+- Using local storage first, then migrating to S3
+- Testing with a subset of files before full migration
+
 Existing files remain on disk. Akashica creates versioned copies in `.akashica/`.
 
 ---
@@ -1684,14 +1688,14 @@ Akashica provides production-ready version control for content management. The t
 - Follow **best practices** for commit messages, branching, and security
 - **Audit trail** is automatic—every change is tracked forever
 
-**Next steps**:
+**Your next steps**:
 1. Set up your first repository (local or S3)
 2. Practice the basic workflow (checkout, edit, commit)
 3. Explore advanced features (branch reading, historical access)
 4. Implement team workflows and policies
 5. Monitor and optimize as you scale
 
-**Resources**:
+**Additional resources**:
 - [URI Scheme](URI_SCHEME.md): Complete aka:// specification
 - [Architecture](ARCHITECTURE.md): Session-first design details
 - [API Reference](API_IMPLEMENTATION_SUMMARY.md): Programmatic access
