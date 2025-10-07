@@ -82,7 +82,8 @@ public actor AkashicaRepository {
     public func publishWorkspace(
         _ workspace: WorkspaceID,
         toBranch branch: String,
-        message: String
+        message: String,
+        author: String = "system"
     ) async throws -> CommitID {
         // 1. Generate new commit ID
         let newCommitID = CommitID(value: "@\(Int.random(in: 1000...9999))")
@@ -96,7 +97,16 @@ public actor AkashicaRepository {
         // 3. Write root manifest for new commit
         try await storage.writeRootManifest(commit: newCommitID, data: rootManifestData)
 
-        // 4. Update branch pointer with CAS
+        // 4. Write commit metadata
+        let metadata = CommitMetadata(
+            message: message,
+            author: author,
+            timestamp: Date(),
+            parent: workspace.baseCommit
+        )
+        try await storage.writeCommitMetadata(commit: newCommitID, metadata: metadata)
+
+        // 5. Update branch pointer with CAS
         let currentBranchPointer = try await storage.readBranch(name: branch)
         try await storage.updateBranch(
             name: branch,
@@ -104,7 +114,7 @@ public actor AkashicaRepository {
             newCommit: newCommitID
         )
 
-        // 5. Delete workspace
+        // 6. Delete workspace
         try await storage.deleteWorkspace(workspace: workspace)
 
         return newCommitID
@@ -121,6 +131,31 @@ public actor AkashicaRepository {
     public func currentCommit(branch: String) async throws -> CommitID {
         let pointer = try await storage.readBranch(name: branch)
         return pointer.head
+    }
+
+    // MARK: - Commit Metadata
+
+    /// Get metadata for a commit
+    public func commitMetadata(_ commit: CommitID) async throws -> CommitMetadata {
+        try await storage.readCommitMetadata(commit: commit)
+    }
+
+    /// Get commit history for a branch
+    /// - Parameters:
+    ///   - branch: Branch name to get history for
+    ///   - limit: Maximum number of commits to return (default: 10)
+    /// - Returns: Array of commit metadata in reverse chronological order
+    public func commitHistory(branch: String, limit: Int = 10) async throws -> [(commit: CommitID, metadata: CommitMetadata)] {
+        var history: [(commit: CommitID, metadata: CommitMetadata)] = []
+        var currentCommit: CommitID? = try await currentCommit(branch: branch)
+
+        while let commit = currentCommit, history.count < limit {
+            let metadata = try await storage.readCommitMetadata(commit: commit)
+            history.append((commit: commit, metadata: metadata))
+            currentCommit = metadata.parent
+        }
+
+        return history
     }
 
     // MARK: - Internal Helpers

@@ -34,6 +34,17 @@ public protocol StorageAdapter: Sendable {
     ///   - data: Manifest data to write
     func writeRootManifest(commit: CommitID, data: Data) async throws
 
+    /// Read commit metadata
+    /// - Parameter commit: Commit ID to read metadata from
+    /// - Returns: Commit metadata (message, author, timestamp, parent)
+    func readCommitMetadata(commit: CommitID) async throws -> CommitMetadata
+
+    /// Write commit metadata
+    /// - Parameters:
+    ///   - commit: Commit ID to write metadata for
+    ///   - metadata: Commit metadata to write
+    func writeCommitMetadata(commit: CommitID, metadata: CommitMetadata) async throws
+
     // MARK: - Branch Operations
 
     /// Read branch pointer

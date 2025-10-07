@@ -95,6 +95,29 @@ public struct LocalStorageAdapter: StorageAdapter {
         try data.write(to: path)
     }
 
+    public func readCommitMetadata(commit: CommitID) async throws -> CommitMetadata {
+        let path = changesetPath(commit: commit).appendingPathComponent("commit.json")
+        let data = try Data(contentsOf: path)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(CommitMetadata.self, from: data)
+    }
+
+    public func writeCommitMetadata(commit: CommitID, metadata: CommitMetadata) async throws {
+        let path = changesetPath(commit: commit).appendingPathComponent("commit.json")
+
+        try FileManager.default.createDirectory(
+            at: changesetPath(commit: commit),
+            withIntermediateDirectories: true
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(metadata)
+        try data.write(to: path)
+    }
+
     // MARK: - Branch Operations
 
     public func readBranch(name: String) async throws -> BranchPointer {

@@ -29,11 +29,15 @@ actor AkashicaRepository {
     // Workspace lifecycle
     func createWorkspace(from: CommitID) async throws -> WorkspaceID
     func deleteWorkspace(_ workspace: WorkspaceID) async throws
-    func publishWorkspace(_:toBranch:message:) async throws -> CommitID
+    func publishWorkspace(_:toBranch:message:author:) async throws -> CommitID
 
     // Branch operations
     func branches() async throws -> [String]
     func currentCommit(branch: String) async throws -> CommitID
+
+    // Commit metadata
+    func commitMetadata(_ commit: CommitID) async throws -> CommitMetadata
+    func commitHistory(branch: String, limit: Int) async throws -> [(CommitID, CommitMetadata)]
 }
 ```
 
@@ -196,8 +200,15 @@ let status = try await session.status()
 let newCommit = try await repo.publishWorkspace(
     workspaceID,
     toBranch: "main",
-    message: "Update documentation"
+    message: "Update documentation",
+    author: "alice"
 )
+
+// View commit history
+let history = try await repo.commitHistory(branch: "main", limit: 5)
+for (commit, metadata) in history {
+    print("\(metadata.author): \(metadata.message)")
+}
 ```
 
 #### Pattern 3: Multiple independent sessions
@@ -319,14 +330,18 @@ let original = try await sessionC.readFile(at: "file.txt")
    - ✅ ContentHash tests (4 tests, SHA-256 verification)
    - ✅ Hash deduplication tests (3 tests, storage integration)
    - ✅ Workflow integration tests (14 tests, end-to-end scenarios)
+   - ✅ Commit metadata tests (11 tests, storage, history, serialization)
    - ✅ Placeholder test (1 test, AkashicaCore)
-   - **Total: 22 tests passing**
+   - **Total: 33 tests passing**
    - ⚠️ TODO: Model tests (Codable, path operations)
    - ⚠️ TODO: Nested directory workflow tests
 
-6. **Commit metadata storage**
-   - Store commit messages, author, timestamp
-   - Retrieve commit metadata for history
+6. ✅ ~~**Commit metadata storage**~~ **DONE**
+   - ✅ CommitMetadata model with message, author, timestamp, parent
+   - ✅ Storage methods in StorageAdapter protocol
+   - ✅ LocalStorageAdapter implementation (ISO8601 JSON)
+   - ✅ Repository API: commitMetadata(), commitHistory()
+   - ✅ 11 comprehensive tests covering storage, history, serialization
 
 7. **Nested directory support**
    - Extend `updateWorkspaceManifests()` for nested paths
@@ -444,6 +459,7 @@ Sources/Akashica/
     WorkspaceMetadata.swift                      # workspace.json
     WorkspaceStatus.swift                        # Modified/added/deleted files
     FileChange.swift                             # Diff result
+    CommitMetadata.swift                         # Commit message, author, timestamp, parent
   Storage/
     StorageAdapter.swift                         # Protocol for backends
   Errors/
@@ -463,7 +479,9 @@ Sources/AkashicaCore/
 
 Tests/
   AkashicaTests/
-    PlaceholderTests.swift                       # ContentHash tests (4 tests)
+    ContentHashTests.swift                       # SHA-256 verification (4 tests)
+    CommitMetadataTests.swift                    # Metadata storage & history (11 tests)
+    WorkflowIntegrationTests.swift               # End-to-end workflows (14 tests)
   AkashicaStorageTests/
     HashDeduplicationTests.swift                 # Storage integration (3 tests)
   AkashicaCoreTests/
@@ -532,15 +550,15 @@ Build complete! (0.10s)
 - ⚠️ **Rename detection** - COW-based rename tracking in status() (Session.swift:417-420, marked complex)
 - ✅ ~~SHA-256 hashing~~ - **DONE**: CryptoKit integrated, 22 tests passing
 - ✅ ~~Integration tests~~ - **DONE**: 14 workflow tests, full coverage
-- ⚠️ Tests - Comprehensive (22 tests: 14 workflow, 4 hashing, 3 storage, 1 placeholder), Model tests TODO
-- ⚠️ Commit metadata - Message parameter unused in `publishWorkspace` (Repository.swift:84)
+- ✅ ~~Commit metadata~~ - **DONE**: 11 tests, history tracking, ISO8601 JSON storage
+- ⚠️ Tests - Comprehensive (33 tests: 14 workflow, 11 metadata, 4 hashing, 3 storage, 1 placeholder), Model tests TODO
 
 **Implementation confidence:**
-- Core workflow: ✅ **High** - publish/read/status complete with 22 passing tests
+- Core workflow: ✅ **High** - publish/read/status complete with 33 passing tests
 - Storage abstraction: ✅ **High** - clean protocol, local adapter complete
 - Concurrency: ✅ **High** - proper actor isolation, no shared mutable state
 - Edge cases: ✅ **High** - comprehensive test coverage validates correctness
-- Production readiness: ✅ **High** - real SHA-256, integration tests, error handling validated
+- Production readiness: ✅ **High** - real SHA-256, commit metadata, integration tests, error handling validated
 - Limitations: ⚠️ Root-level files only (nested directories deferred)
 
 **Key design decisions made:**
@@ -551,7 +569,7 @@ Build complete! (0.10s)
 5. ⚠️ Rename detection deferred (complex, requires content tracking)
 
 **Questions for discussion:**
-1. Should `publishWorkspace()` store the commit message? (Currently ignored)
+1. ✅ ~~Should `publishWorkspace()` store the commit message?~~ - **RESOLVED**: Now stores CommitMetadata with message, author, timestamp, parent
 2. Should `buildCommitManifests` validate file hashes before publishing?
 3. Do we need workspace locking to prevent concurrent modifications?
 4. Should status() cache results, or always recompute?
