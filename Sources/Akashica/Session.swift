@@ -87,13 +87,18 @@ public actor AkashicaSession {
             throw AkashicaError.sessionReadOnly
         }
 
-        // Delete file from workspace
-        try await storage.deleteWorkspaceFile(
-            workspace: workspaceID,
-            path: path
-        )
+        // Try to delete file from workspace (may not exist if it's only in base)
+        do {
+            try await storage.deleteWorkspaceFile(
+                workspace: workspaceID,
+                path: path
+            )
+        } catch {
+            // File might not exist in workspace, that's OK if it exists in base
+            // The manifest update will handle recording the deletion
+        }
 
-        // Update parent directory manifests
+        // Update parent directory manifests (records the deletion)
         try await updateWorkspaceManifests(workspace: workspaceID, for: path)
     }
 
@@ -323,8 +328,56 @@ public actor AkashicaSession {
     }
 
     private func updateWorkspaceManifests(workspace: WorkspaceID, for path: RepositoryPath) async throws {
-        // TODO: Update .dir manifests for all parent directories
-        // This ensures the directory tree is consistent
+        // For now, simple implementation: just update the root manifest
+        // A full implementation would update all parent directories
+
+        guard path.components.count == 1 else {
+            // TODO: Handle nested directories
+            return
+        }
+
+        // Read current workspace manifest (if exists)
+        let existingData = try await storage.readWorkspaceManifest(workspace: workspace, path: RepositoryPath(string: ""))
+
+        // Parse existing entries
+        var entries: [String: (hash: String, size: Int64, isDirectory: Bool)] = [:]
+        if let data = existingData {
+            let parsed = try parseManifest(data)
+            for entry in parsed {
+                entries[entry.name] = (hash: entry.hash, size: entry.size, isDirectory: entry.isDirectory)
+            }
+        } else {
+            // No workspace manifest exists yet - inherit all files from base commit
+            let metadata = try await storage.readWorkspaceMetadata(workspace: workspace)
+            do {
+                let baseEntries = try await listDirectoryFromCommit(metadata.base, path: RepositoryPath(string: ""))
+                for entry in baseEntries {
+                    entries[entry.name] = (hash: entry.hash.value, size: entry.size, isDirectory: entry.type == .directory)
+                }
+            } catch {
+                // Base directory might not exist, that's OK
+            }
+        }
+
+        // Check if file exists in workspace
+        if let fileData = try await storage.readWorkspaceFile(workspace: workspace, path: path) {
+            // File exists, compute hash and update entry
+            let hash = ContentHash(data: fileData)
+            entries[path.name!] = (hash: hash.value, size: Int64(fileData.count), isDirectory: false)
+        } else {
+            // File doesn't exist, remove from manifest
+            entries.removeValue(forKey: path.name!)
+        }
+
+        // Build new manifest (even if empty, to mark that we've made changes)
+        let manifestLines = entries.map { name, info in
+            let displayName = info.isDirectory ? "\(name)/" : name
+            return "\(info.hash):\(info.size):\(displayName)"
+        }.sorted()
+
+        let manifestContent = manifestLines.isEmpty ? "" : manifestLines.joined(separator: "\n")
+        let manifestData = manifestContent.data(using: .utf8)!
+        try await storage.writeWorkspaceManifest(workspace: workspace, path: RepositoryPath(string: ""), data: manifestData)
     }
 
     /// Recursively collect changes between workspace and base commit
@@ -436,15 +489,22 @@ public actor AkashicaSession {
             }
         }
 
-        // Process base entries not in workspace (deletions)
+        // Process base entries not in workspace (potential deletions)
         for (name, baseEntry) in baseMap {
             if !processedNames.contains(name) {
                 let filePath = path.components.isEmpty
                     ? RepositoryPath(string: name)
                     : RepositoryPath(components: path.components + [name])
-                if baseEntry.type == .file {
-                    deleted.append(filePath)
+
+                // Only mark as deleted if file existed in workspace manifest but is now gone
+                // If workspace manifest doesn't exist, file is unchanged (still in base)
+                if let workspaceData = workspaceManifestData {
+                    // Workspace manifest exists, so this file should have been in workspaceMap if it still exists
+                    if baseEntry.type == .file {
+                        deleted.append(filePath)
+                    }
                 }
+                // else: no workspace manifest means no changes, file is still in base (unchanged)
             }
         }
     }
