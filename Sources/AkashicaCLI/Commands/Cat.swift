@@ -4,30 +4,38 @@ import Akashica
 
 struct Cat: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Display file contents from virtual filesystem"
+        abstract: "Display file contents from repository",
+        discussion: """
+        Use aka:// URIs to reference repository content:
+
+        Examples:
+          akashica cat aka:///reports/q3.pdf              # Absolute path
+          akashica cat aka:/data.txt                      # Relative to virtual CWD
+          akashica cat aka://main/config.yml              # From branch 'main'
+          akashica cat aka://@1234/data/historical.csv    # From commit @1234
+
+        Path types:
+          aka:///path      - Absolute repository path
+          aka:/path        - Relative to virtual CWD
+          aka://main/path  - From branch 'main'
+          aka://@1234/path - From commit @1234
+        """
     )
 
     @OptionGroup var storage: StorageOptions
 
-    @Argument(help: "File path")
+    @Argument(help: "File path (aka:// URI)")
     var path: String
 
     func run() async throws {
         let config = storage.makeConfig()
 
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Error: Not in a workspace. Use 'akashica checkout' to create one.")
-            throw ExitCode.failure
-        }
+        // Parse URI
+        let uri = try AkaURI.parse(path)
 
-        // Create session
-        let repo = try await config.createValidatedRepository()
-        let session = await repo.session(workspace: workspace)
-
-        // Resolve path (relative to virtual CWD)
-        let vctx = config.virtualContext()
-        let targetPath = vctx.resolvePath(path)
+        // Get session and resolve path
+        let session = try await config.getSession(for: uri.scope)
+        let targetPath = try config.resolvePathFromURI(uri)
 
         // Read file
         do {

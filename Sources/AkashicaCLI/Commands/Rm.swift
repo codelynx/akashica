@@ -4,30 +4,40 @@ import Akashica
 
 struct Rm: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Remove file from virtual filesystem"
+        abstract: "Remove file from repository",
+        discussion: """
+        Remove files from the current workspace (write operation).
+
+        Examples:
+          akashica rm aka:///old-file.txt        # Absolute path
+          akashica rm aka:/draft.pdf             # Relative path
+
+        Note: Only works with current workspace (aka:/ or aka:///).
+        Cannot remove files from branches or commits (read-only).
+        """
     )
 
     @OptionGroup var storage: StorageOptions
 
-    @Argument(help: "File path to remove")
+    @Argument(help: "File path to remove (aka:// URI)")
     var path: String
 
     func run() async throws {
         let config = storage.makeConfig()
 
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Error: Not in a workspace. Use 'akashica checkout' to create one.")
+        // Parse URI
+        let uri = try AkaURI.parse(path)
+
+        // Validate writable
+        guard uri.isWritable else {
+            print("Error: Cannot delete from read-only scope: \(uri.scopeDescription)")
+            print("Only current workspace (aka:/ or aka:///) supports deletions")
             throw ExitCode.failure
         }
 
-        // Create session
-        let repo = try await config.createValidatedRepository()
-        let session = await repo.session(workspace: workspace)
-
-        // Resolve path (relative to virtual CWD)
-        let vctx = config.virtualContext()
-        let targetPath = vctx.resolvePath(path)
+        // Get session and resolve path
+        let session = try await config.getSession(for: uri.scope)
+        let targetPath = try config.resolvePathFromURI(uri)
 
         // Delete file
         do {
@@ -35,9 +45,6 @@ struct Rm: AsyncParsableCommand {
             print("Removed \(targetPath.pathString)")
         } catch AkashicaError.fileNotFound {
             print("Error: File not found: \(targetPath.pathString)")
-            throw ExitCode.failure
-        } catch AkashicaError.sessionReadOnly {
-            print("Error: Cannot modify read-only session")
             throw ExitCode.failure
         } catch {
             print("Error: Failed to remove file: \(error.localizedDescription)")

@@ -4,34 +4,51 @@ import Akashica
 
 struct Mv: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Move/rename file in virtual filesystem"
+        abstract: "Move/rename file in repository",
+        discussion: """
+        Move or rename files in the current workspace (write operation).
+
+        Examples:
+          akashica mv aka:///draft.pdf aka:///final.pdf    # Rename (absolute)
+          akashica mv aka:/old.txt aka:/new.txt            # Rename (relative)
+          akashica mv aka:/file.pdf aka:/../archive/       # Move to different dir
+
+        Note: Both source and destination must be in current workspace.
+        Cannot move files from/to branches or commits (read-only).
+        """
     )
 
     @OptionGroup var storage: StorageOptions
 
-    @Argument(help: "Source path")
+    @Argument(help: "Source path (aka:// URI)")
     var source: String
 
-    @Argument(help: "Destination path")
+    @Argument(help: "Destination path (aka:// URI)")
     var destination: String
 
     func run() async throws {
         let config = storage.makeConfig()
 
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Error: Not in a workspace. Use 'akashica checkout' to create one.")
+        // Parse both URIs
+        let srcURI = try AkaURI.parse(source)
+        let dstURI = try AkaURI.parse(destination)
+
+        // Both must be writable (current workspace only)
+        guard srcURI.isWritable else {
+            print("Error: Cannot move from read-only scope: \(srcURI.scopeDescription)")
+            throw ExitCode.failure
+        }
+        guard dstURI.isWritable else {
+            print("Error: Cannot move to read-only scope: \(dstURI.scopeDescription)")
             throw ExitCode.failure
         }
 
-        // Create session
-        let repo = try await config.createValidatedRepository()
-        let session = await repo.session(workspace: workspace)
+        // Get session (both must be same workspace)
+        let session = try await config.getSession(for: srcURI.scope)
 
-        // Resolve paths (relative to virtual CWD)
-        let vctx = config.virtualContext()
-        let sourcePath = vctx.resolvePath(source)
-        let destPath = vctx.resolvePath(destination)
+        // Resolve paths
+        let sourcePath = try config.resolvePathFromURI(srcURI)
+        let destPath = try config.resolvePathFromURI(dstURI)
 
         // Move file
         do {
@@ -39,9 +56,6 @@ struct Mv: AsyncParsableCommand {
             print("Moved \(sourcePath.pathString) → \(destPath.pathString)")
         } catch AkashicaError.fileNotFound {
             print("Error: Source file not found: \(sourcePath.pathString)")
-            throw ExitCode.failure
-        } catch AkashicaError.sessionReadOnly {
-            print("Error: Cannot modify read-only session")
             throw ExitCode.failure
         } catch {
             print("Error: Failed to move file: \(error.localizedDescription)")

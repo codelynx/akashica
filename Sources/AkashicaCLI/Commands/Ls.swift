@@ -4,34 +4,66 @@ import Akashica
 
 struct Ls: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "List directory contents in virtual filesystem"
+        abstract: "List directory contents from repository",
+        discussion: """
+        Use aka:// URIs to reference repository content:
+
+        Examples:
+          akashica ls                                  # Current virtual CWD
+          akashica ls aka:///projects/                 # Absolute path
+          akashica ls aka:/tokyo/                      # Relative to virtual CWD
+          akashica ls aka://main/                      # Root of branch 'main'
+          akashica ls aka://@1234/reports/             # Directory in commit @1234
+
+        Path types:
+          aka:///path      - Absolute repository path
+          aka:/path        - Relative to virtual CWD
+          aka://main/path  - From branch 'main'
+          aka://@1234/path - From commit @1234
+        """
     )
 
     @OptionGroup var storage: StorageOptions
 
-    @Argument(help: "Directory path (optional, defaults to current directory)")
+    @Argument(help: "Directory path (aka:// URI, defaults to current directory)")
     var path: String?
 
     func run() async throws {
         let config = storage.makeConfig()
 
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Error: Not in a workspace. Use 'akashica checkout' to create one.")
-            throw ExitCode.failure
+        // Determine target path
+        let targetPath: RepositoryPath
+        if let pathArg = path {
+            // Parse URI
+            let uri = try AkaURI.parse(pathArg)
+
+            // Get session and resolve path
+            let session = try await config.getSession(for: uri.scope)
+            targetPath = try config.resolvePathFromURI(uri)
+
+            // List directory
+            try await listDirectory(session: session, path: targetPath)
+        } else {
+            // No path provided - list current virtual CWD
+            // This requires current workspace
+            guard let workspace = try config.currentWorkspace() else {
+                print("Error: No active workspace")
+                print("Run 'akashica checkout <branch>' to create a workspace")
+                throw ExitCode.failure
+            }
+
+            let repo = try await config.createValidatedRepository()
+            let session = await repo.session(workspace: workspace)
+            let vctx = config.virtualContext()
+            targetPath = vctx.currentDirectory()
+
+            try await listDirectory(session: session, path: targetPath)
         }
+    }
 
-        // Create session
-        let repo = try await config.createValidatedRepository()
-        let session = await repo.session(workspace: workspace)
-
-        // Resolve path (relative to virtual CWD)
-        let vctx = config.virtualContext()
-        let targetPath = path.map { vctx.resolvePath($0) } ?? vctx.currentDirectory()
-
-        // List directory
+    private func listDirectory(session: AkashicaSession, path: RepositoryPath) async throws {
         do {
-            let entries = try await session.listDirectory(at: targetPath)
+            let entries = try await session.listDirectory(at: path)
 
             if entries.isEmpty {
                 // Empty directory
@@ -56,7 +88,7 @@ struct Ls: AsyncParsableCommand {
                 print("\(entry.name)\(typeIndicator)  (\(sizeString))")
             }
         } catch AkashicaError.fileNotFound {
-            print("Error: Directory not found: \(targetPath.pathString)")
+            print("Error: Directory not found: \(path.pathString)")
             throw ExitCode.failure
         }
     }
