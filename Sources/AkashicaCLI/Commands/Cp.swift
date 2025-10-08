@@ -26,7 +26,8 @@ struct Cp: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "Source path (local or aka:// URI)")
     var source: String
@@ -35,7 +36,14 @@ struct Cp: AsyncParsableCommand {
     var destination: String
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
+
+        // Check if in view mode
+        if context.workspace.view.active {
+            print("Error: Cannot copy files in view mode")
+            print("Exit view mode first: akashica view --exit")
+            throw ExitCode.failure
+        }
 
         // Determine if paths are local or remote
         let srcIsRemote = AkaURI.isAkaURI(source)
@@ -49,11 +57,11 @@ struct Cp: AsyncParsableCommand {
 
         case (false, true):
             // Local → Remote (upload)
-            try await uploadFile(config: config)
+            try await uploadFile(context: context)
 
         case (true, false):
             // Remote → Local (download)
-            try await downloadFile(config: config)
+            try await downloadFile(context: context)
 
         case (false, false):
             // Local → Local
@@ -64,7 +72,7 @@ struct Cp: AsyncParsableCommand {
     }
 
     /// Upload file from local filesystem to repository
-    private func uploadFile(config: Config) async throws {
+    private func uploadFile(context: CommandContext) async throws {
         // Parse destination URI
         let uri = try AkaURI.parse(destination)
 
@@ -76,8 +84,8 @@ struct Cp: AsyncParsableCommand {
         }
 
         // Get session and resolve path
-        let session = try await config.getSession(for: uri.scope)
-        let remotePath = try config.resolvePathFromURI(uri)
+        let session = try await context.getSession(for: uri.scope)
+        let remotePath = context.resolvePathFromURI(uri)
 
         // Expand local path
         let expandedPath = (source as NSString).expandingTildeInPath
@@ -116,13 +124,13 @@ struct Cp: AsyncParsableCommand {
     }
 
     /// Download file from repository to local filesystem
-    private func downloadFile(config: Config) async throws {
+    private func downloadFile(context: CommandContext) async throws {
         // Parse source URI
         let uri = try AkaURI.parse(source)
 
         // Get session and resolve path
-        let session = try await config.getSession(for: uri.scope)
-        let remotePath = try config.resolvePathFromURI(uri)
+        let session = try await context.getSession(for: uri.scope)
+        let remotePath = context.resolvePathFromURI(uri)
 
         // Read from session
         let data: Data

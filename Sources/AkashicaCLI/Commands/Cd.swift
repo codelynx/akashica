@@ -16,13 +16,21 @@ struct Cd: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "Directory path (aka:// URI)")
     var path: String
 
     func run() async throws {
-        let config = storage.makeConfig()
+        var context = try await CommandContext.resolve(profileFlag: profile)
+
+        // Check if in view mode
+        if context.workspace.view.active {
+            print("Error: Cannot cd in view mode")
+            print("Exit view mode first: akashica view --exit")
+            throw ExitCode.failure
+        }
 
         // Parse URI
         let uri = try AkaURI.parse(path)
@@ -35,17 +43,16 @@ struct Cd: AsyncParsableCommand {
         }
 
         // Get session and resolve path
-        let session = try await config.getSession(for: uri.scope)
-        let targetPath = try config.resolvePathFromURI(uri)
+        let session = try await context.getSession(for: uri.scope)
+        let targetPath = context.resolvePathFromURI(uri)
 
         // Verify directory exists
         do {
             let entries = try await session.listDirectory(at: targetPath)
             _ = entries // Just to verify it's a directory
 
-            // Update virtual CWD
-            let vctx = config.virtualContext()
-            try vctx.changeDirectory(to: targetPath)
+            // Update virtual CWD in workspace state
+            try await context.updateVirtualCwd(targetPath)
 
             // Print new path
             print(targetPath.pathString.isEmpty ? "/" : targetPath.pathString)
