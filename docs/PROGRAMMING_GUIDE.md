@@ -2,6 +2,15 @@
 
 A comprehensive guide for Swift developers integrating Akashica into macOS, iOS, or server-side Swift applications.
 
+> **⚠️ DEVELOPMENT SOFTWARE - USE AT YOUR OWN RISK**
+>
+> Akashica is currently under active development and **NOT RECOMMENDED FOR PRODUCTION USE**. This software is provided "as is" without warranty of any kind. The developers assume **NO RESPONSIBILITY** for:
+> - Data loss or corruption
+> - Service interruptions or downtime
+> - Any damages or losses arising from use of this software
+>
+> **Always maintain separate backups of critical data.** For production deployments, wait for a stable release (v1.0+) or contact the maintainers for enterprise support options.
+
 ## Table of Contents
 
 1. [Introduction](#introduction)
@@ -242,20 +251,41 @@ let storage = try await S3StorageAdapter(
 let repo = AkashicaRepository(storage: storage)
 ```
 
-**S3 storage layout:**
+**S3 storage layout (with 2-level sharding):**
 ```
 s3://my-app-content/
-├── objects/<hash>          # Content-addressed files
-├── manifests/<hash>        # Directory structures
+├── objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.dat   # Content-addressed files (sharded)
+├── objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.dir   # Content-addressed manifests (sharded)
+├── objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.tomb  # Tombstone files (sharded)
 ├── commits/@1234/
 │   ├── root-manifest
 │   └── metadata.json
-├── branches/main           # Branch pointer
+├── branches/main                                    # Branch pointer
 └── workspaces/@1234$a1b3/
     ├── metadata.json
     ├── files/
     └── cow/
 ```
+
+**Petabyte-scale sharding:**
+
+Akashica uses **2-level sharding** for content-addressed objects, distributing files across 65,536 prefixes (256 × 256) based on the first 4 hex characters of their hash:
+
+```
+objects/
+├── a3/
+│   ├── f2/
+│   │   └── b8d9c1e4f5...a4b5c6d7e8f9.dat
+│   └── f3/
+│       └── ...
+└── ff/
+    └── fe/
+        └── ...
+```
+
+**Format**: `objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.{ext}`
+
+This prevents S3 prefix hotspots and enables efficient petabyte-scale storage while keeping each directory manageable. The sharding is **completely transparent** to your application code—all operations use `ContentHash` and the adapter handles sharding automatically.
 
 **Multi-tenant setup (optional):**
 
@@ -456,6 +486,7 @@ actor AkashicaRepository {
     func session(commit: CommitID) -> AkashicaSession
     func session(workspace: WorkspaceID) -> AkashicaSession
     func session(branch: String) async throws -> AkashicaSession
+    func view(at commitID: CommitID) -> AkashicaSession  // Lightweight read-only view
 
     // Workspace lifecycle
     func createWorkspace(from: CommitID) async throws -> WorkspaceID
@@ -466,10 +497,13 @@ actor AkashicaRepository {
     // Branch operations
     func branches() async throws -> [String]
     func currentCommit(branch: String) async throws -> CommitID
+    func resetBranch(name: String, to: CommitID, force: Bool) async throws
 
-    // Commit metadata
+    // Commit metadata & history
     func commitMetadata(_ commit: CommitID) async throws -> CommitMetadata
     func commitHistory(branch: String, limit: Int) async throws -> [(CommitID, CommitMetadata)]
+    func isAncestor(_ ancestor: CommitID, of descendant: CommitID) async throws -> Bool
+    func commitsBetween(from: CommitID, to: CommitID) async throws -> [(CommitID, CommitMetadata)]
 
     // Content scrubbing (advanced)
     func scrubContent(hash: ContentHash, reason: String, deletedBy: String) async throws
@@ -535,6 +569,43 @@ This is possible because:
 ---
 
 ## Basic Operations
+
+### Read-Only View Mode
+
+The `view(at:)` method is a **semantic alias** for `session(commit:)`, providing clearer intent when implementing read-only historical exploration features.
+
+```swift
+// These are identical - view(at:) simply calls session(commit:)
+let viewSession = repo.view(at: commitID)
+let readSession = repo.session(commit: commitID)
+
+// Both return the same read-only AkashicaSession
+let data = try await viewSession.readFile(at: "config.yml")
+
+// Both are read-only - write operations will fail
+// try await viewSession.writeFile(data, to: "file.txt")  // ❌ Error: read-only
+```
+
+**Implementation note:**
+```swift
+public func view(at commitID: CommitID) -> AkashicaSession {
+    session(commit: commitID)  // Direct delegation - identical behavior
+}
+```
+
+**When to use `view(at:)` vs `session(commit:)`:**
+
+Use `view(at:)` for **semantic clarity** in these contexts:
+- Implementing CLI-style "view mode" features
+- Read-only historical exploration UI
+- Audit/compliance tools that inspect historical state
+
+Use `session(commit:)` for:
+- General programmatic read operations
+- Most application code
+- When the "view" terminology doesn't apply
+
+Both methods have **identical performance and behavior**—choose based on semantic intent, not efficiency.
 
 ### Reading Files
 
@@ -915,6 +986,86 @@ for (commit, metadata) in history {
   Date: 2025-10-06 16:45:00
   Parent: @0
 ```
+
+### Branch Reset (Rewinding History)
+
+**Resetting a branch** moves the branch pointer to a different commit, potentially discarding commits. This is useful for undoing mistakes or cleaning up experimental branches.
+
+**Safe reset to ancestor:**
+```swift
+// Get current branch head
+let currentHead = try await repo.currentCommit(branch: "develop")
+// Current: @1245
+
+// Reset to previous commit
+let targetCommit = CommitID(value: "@1240")
+try await repo.resetBranch(name: "develop", to: targetCommit, force: false)
+
+// Branch now points to @1240
+// Commits @1241-@1245 are orphaned (inaccessible via branch)
+```
+
+**Force reset to non-ancestor:**
+```swift
+// Reset experimental branch to completely different commit
+do {
+    try await repo.resetBranch(name: "experimental", to: mainCommit, force: false)
+} catch AkashicaError.nonAncestorReset(let branch, let current, let target) {
+    print("Error: \(target) is not an ancestor of \(current)")
+    print("Use force: true to override")
+}
+
+// Override with force flag
+try await repo.resetBranch(name: "experimental", to: mainCommit, force: true)
+// Branch history has diverged
+```
+
+**Checking ancestry:**
+```swift
+let isAncestor = try await repo.isAncestor(olderCommit, of: newerCommit)
+
+if isAncestor {
+    print("\(olderCommit) is in the parent chain of \(newerCommit)")
+} else {
+    print("\(olderCommit) is NOT an ancestor of \(newerCommit)")
+}
+```
+
+**Finding orphaned commits:**
+```swift
+// Get commits that will be orphaned by a reset
+let orphanedCommits = try await repo.commitsBetween(
+    from: targetCommit,  // Reset target
+    to: currentHead      // Current head
+)
+
+// Returns commits in reverse chronological order (excluding targetCommit)
+for (commit, metadata) in orphanedCommits {
+    print("Will orphan: [\(commit.value)] \(metadata.message)")
+}
+```
+
+**Error handling:**
+```swift
+do {
+    try await repo.resetBranch(name: "main", to: targetCommit, force: false)
+} catch AkashicaError.branchNotFound(let name) {
+    print("Branch '\(name)' does not exist")
+} catch AkashicaError.commitNotFound(let commit) {
+    print("Commit '\(commit.value)' does not exist")
+} catch AkashicaError.nonAncestorReset(let branch, let current, let target) {
+    print("Cannot reset '\(branch)' to \(target)")
+    print("Reason: Not an ancestor of current head \(current)")
+    print("Use force: true to override safety check")
+}
+```
+
+**Key points:**
+- Default behavior (force: false) only allows resetting to ancestor commits
+- Force flag (force: true) bypasses ancestry check but still validates commit exists
+- Orphaned commits remain in storage but are not accessible via the branch
+- No undo - use with caution, especially on shared branches
+- Consider using rollback (checkout old commit + publish) for production branches
 
 ---
 
@@ -1911,6 +2062,32 @@ You now have everything you need to integrate Akashica into your Swift applicati
 - **Issues:** [GitHub Issues](https://github.com/codelynx/akashica/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/codelynx/akashica/discussions)
 - **Email:** support@example.com (update with actual support email)
+
+---
+
+## License
+
+MIT License
+
+Copyright (c) 2025 Kaz Yoshikawa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+**THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.**
 
 ---
 

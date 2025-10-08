@@ -2,6 +2,15 @@
 
 A comprehensive guide for technical directors and content management teams.
 
+> **⚠️ DEVELOPMENT SOFTWARE - USE AT YOUR OWN RISK**
+>
+> Akashica is currently under active development and **NOT RECOMMENDED FOR PRODUCTION USE**. This software is provided "as is" without warranty of any kind. The developers assume **NO RESPONSIBILITY** for:
+> - Data loss or corruption
+> - Service interruptions or downtime
+> - Any damages or losses arising from use of this software
+>
+> **Always maintain separate backups of critical data.** For production deployments, wait for a stable release (v1.0+) or contact the maintainers for enterprise support options.
+
 ## Table of Contents
 
 1. [Introduction](#introduction)
@@ -1064,6 +1073,162 @@ akashica log --show=@7234
 - Export full repository state at key dates
 - Hashes prove content hasn't been tampered with
 
+### Workflow 6: Read-Only Historical Exploration
+
+**Scenario**: Exploring historical repository state without creating a workspace
+
+The `view` command provides a lightweight, read-only mode for exploring historical commits without the overhead of creating a full workspace.
+
+```bash
+# Enter view mode at a specific commit
+akashica view @7234
+
+# Output:
+# Entered read-only view mode at @7234
+# Virtual CWD: /
+#
+# All commands now operate in this view context.
+# To exit view mode: akashica view --exit
+
+# Browse the repository at that point in time
+akashica ls aka:/
+akashica cat aka:/config/settings.yml
+akashica cd aka:/reports
+akashica ls
+
+# All read operations work normally
+akashica cat aka:/reports/q3-summary.pdf > /tmp/historical-report.pdf
+```
+
+**Exit view mode**:
+```bash
+akashica view --exit
+
+# Output:
+# Exited view mode
+#
+# Run 'akashica checkout <branch>' to create a workspace
+```
+
+**Key differences from workspace checkout**:
+
+| Feature | `checkout` (workspace) | `view` (read-only) |
+|---------|----------------------|-------------------|
+| **Purpose** | Edit and commit changes | Explore history |
+| **Storage overhead** | Creates workspace metadata + COW overlay | Saves view reference (`.akashica/VIEW`) |
+| **Write operations** | ✅ Allowed | ❌ Read-only |
+| **State** | Persistent (survives restarts) | Persistent (until `view --exit`) |
+| **Use case** | Active editing | Historical inspection |
+
+**When to use view mode**:
+- Quickly inspect a historical commit without editing
+- Compare files across different commits
+- Extract specific files from history
+- Audit historical state for compliance
+- Performance-sensitive read operations
+
+**When to use checkout instead**:
+- You need to make changes
+- You want to create a new commit from historical state
+- You need a persistent editing environment
+
+**Key points**:
+- View mode is mutually exclusive with workspace mode
+- Entering view mode clears any active workspace
+- View mode is **persistent** - saved to `.akashica/VIEW` and applies to all subsequent commands
+- All read commands (`ls`, `cat`, `cp` from aka:// to local) work normally
+- Write commands to aka:// URIs are blocked
+- Use `view --exit` to clear the view state and return to normal mode
+
+### Workflow 7: Branch Reset (Rewinding History)
+
+**Scenario**: Undoing commits by rewinding a branch pointer
+
+Unlike creating a new commit with old content (rollback), branch reset actually moves the branch pointer backward in history. This is useful when you want to completely undo recent commits rather than create a revert commit.
+
+**Safe reset to ancestor commit**:
+```bash
+# Check current history
+akashica log --branch main
+# @4567 - Bad commit (broke production)
+# @4512 - Good commit
+# @4498 - Previous commit
+
+# Reset main branch back to @4512 (discards @4567)
+akashica branch reset main --to @4512
+
+# Output:
+# Reset branch 'main' from @4567 to @4512
+
+# Verify history
+akashica log --branch main
+# @4512 - Good commit (now HEAD)
+# @4498 - Previous commit
+# (Note: @4567 is gone from branch history)
+```
+
+**Force reset to unrelated commit**:
+```bash
+# Scenario: Explored a dead-end approach, want to try different direction
+akashica log --branch experimental
+# @5234 - Dead end approach (won't work)
+# @5201 - Tried approach A
+# @5189 - Base commit
+
+# Try to reset to earlier commit on main branch
+akashica branch reset experimental --to @4512
+
+# Output:
+# Error: Cannot reset branch 'experimental' to @4512
+# Reason: @4512 is not an ancestor of current head @5234
+#
+# To force reset to an unrelated commit:
+#   akashica branch reset experimental --to @4512 --force
+
+# Use --force to override safety check
+akashica branch reset experimental --to @4512 --force
+
+# Output:
+# Reset branch 'experimental' from @5234 to @4512
+#
+# Note: Used --force flag. Branch history may have diverged.
+```
+
+**Key differences: Reset vs Rollback**:
+
+| Operation | `branch reset` | `checkout + commit` (rollback) |
+|-----------|----------------|-------------------------------|
+| **What it does** | Moves branch pointer backward | Creates new commit with old content |
+| **History** | Discards commits (orphans them) | Preserves all commits |
+| **Reversible** | No (commits become orphaned) | Yes (can revert the revert) |
+| **Use case** | Undo mistakes, clean history | Document rollback in history |
+| **Safety** | Requires `--force` for non-ancestors | Always safe |
+
+**When to use branch reset**:
+- Undoing accidental commits on your own branch
+- Cleaning up experimental branches
+- Fixing mistakes before anyone else has pulled the branch
+- Development/staging environments where history doesn't matter
+
+**When to use rollback (checkout + commit) instead**:
+- Production branches where history must be preserved
+- Shared branches where others may have based work on the commits
+- Compliance/audit requirements mandate keeping all history
+- You want a clear record that a rollback occurred
+
+**Important warnings**:
+- ⚠️ Reset discards commits - they become orphaned and inaccessible
+- ⚠️ Never reset branches that others are using (use rollback instead)
+- ⚠️ There is no undo for branch reset
+- ⚠️ Use `--force` carefully - it bypasses safety checks
+
+**Key points**:
+- Default behavior prevents accidental non-ancestor resets
+- `--force` flag required to reset to unrelated commits
+- Reset validates target commit exists (even with `--force`)
+- Orphaned commits remain in storage but are not accessible via the branch
+- Consider using rollback (checkout + commit) for production branches
+
 ---
 
 ## Best Practices
@@ -1157,9 +1322,17 @@ akashica ls aka:/// --recursive | sort -k2 -hr | head -20
 5. Verify: `akashica cat aka://main/...`
 
 ## Emergency Rollback
+
+**Method 1: Rollback via new commit** (preserves history)
 1. Find last good commit: `akashica log`
 2. Create workspace: `akashica checkout @XXXX`
 3. Publish: `akashica commit -m "Rollback: ..."`
+
+**Method 2: Branch reset** (rewrites history - use carefully!)
+1. Find last good commit: `akashica log`
+2. Reset branch: `akashica branch reset main --to @XXXX`
+
+⚠️ **Use Method 1 for production**, Method 2 for development/experimental branches only.
 ```
 
 ### For Operations Teams
@@ -1646,6 +1819,27 @@ Storage used: 1 copy (deduplication)
 
 **Savings**: Typically 40-60% for content repositories with duplicates
 
+**Petabyte-scale optimization**: For extremely large repositories, Akashica automatically shards object storage using **2-level content-addressed file sharding**. Files are distributed across 65,536 prefixes (256 × 256) based on the first 4 hex characters of their hash, preventing S3 prefix hotspots and enabling efficient petabyte-scale storage:
+
+```
+objects/
+├── a3/
+│   ├── f2/
+│   │   └── b8d9c1e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9.dat
+│   └── f3/
+│       └── ...
+├── a4/
+│   └── ...
+...
+└── ff/
+    └── fe/
+        └── ...
+```
+
+**Format**: `objects/{hash[0:2]}/{hash[2:4]}/{hash[4:]}.{ext}`
+
+This 2-level sharding provides 65,536 buckets, keeping each directory manageable while scaling to petabytes. The sharding is transparent to users and happens automatically in the storage layer.
+
 ---
 
 **Q: Can I use Akashica programmatically (API)?**
@@ -1692,14 +1886,16 @@ A: **Local storage**:
 - Recommended: <1TB per repository
 
 **S3 storage**:
-- No practical limit (petabytes supported)
+- No practical limit (petabytes supported with automatic sharding)
 - Single file limit: 5TB (S3 maximum)
 - Files per directory: No limit (uses pagination)
+- Automatic content-addressed sharding prevents S3 prefix hotspots at scale
 
 **Performance**:
 - Commit creation: O(n) where n = changed files
-- File read: O(1) - direct hash lookup
+- File read: O(1) - direct hash lookup with sharded prefix
 - Directory listing: O(m) where m = entries in directory
+- Sharding overhead: Transparent, no performance impact on typical operations
 
 ---
 
@@ -1860,5 +2056,31 @@ Akashica provides production-ready version control for content management. The t
 
 ---
 
+## License
+
+MIT License
+
+Copyright (c) 2025 Kaz Yoshikawa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+**THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.**
+
+---
+
 *Last updated: October 2025*
-*Akashica version: 1.0.0*
+*Akashica version: 0.8.0*
