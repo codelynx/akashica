@@ -3,6 +3,7 @@ import Foundation
 import Akashica
 import AkashicaCore
 import AkashicaStorage
+import AkashicaS3Storage
 
 struct Init: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -141,8 +142,28 @@ struct Init: AsyncParsableCommand {
 
     private func parseStoragePath(_ path: String, profileName: String) throws -> ProfileConfig {
         if path.hasPrefix("s3://") {
-            // S3 storage not yet supported in v0.10.0
-            throw InitError.s3NotYetSupported
+            // Parse S3 URI: s3://bucket/prefix
+            let withoutScheme = String(path.dropFirst(5)) // Remove "s3://"
+            let components = withoutScheme.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+
+            guard !components.isEmpty else {
+                throw InitError.invalidS3URI("Bucket name is required (e.g., s3://my-bucket/prefix)")
+            }
+
+            let bucket = String(components[0])
+            let prefix = components.count > 1 ? String(components[1]) : nil
+
+            // Prompt for AWS region
+            print("AWS Region [us-east-1]: ", terminator: "")
+            fflush(stdout)
+            let regionInput = readLine()?.trimmingCharacters(in: .whitespaces)
+            let region = (regionInput?.isEmpty ?? true) ? "us-east-1" : regionInput!
+            print("")
+
+            return ProfileConfig(
+                name: profileName,
+                storage: .s3(bucket: bucket, prefix: prefix, region: region)
+            )
         } else {
             // Local filesystem path
             return ProfileConfig(
@@ -187,7 +208,7 @@ struct Init: AsyncParsableCommand {
         // Ensure storage directory exists before any writes
         try ensureStorageDirectoryExists(config: config)
 
-        let storageAdapter = try createStorageAdapter(config: config)
+        let storageAdapter = try await createStorageAdapter(config: config)
 
         // Create repository metadata
         let repositoryId = config.storage.path?.split(separator: "/").last.map(String.init)
@@ -228,18 +249,31 @@ struct Init: AsyncParsableCommand {
     }
 
     private func getCurrentCommit(config: ProfileConfig, branch: String) async throws -> CommitID {
-        let storageAdapter = try createStorageAdapter(config: config)
+        let storageAdapter = try await createStorageAdapter(config: config)
         let branchPointer = try await storageAdapter.readBranch(name: branch)
         return branchPointer.head
     }
 
-    private func createStorageAdapter(config: ProfileConfig) throws -> StorageAdapter {
+    private func createStorageAdapter(config: ProfileConfig) async throws -> StorageAdapter {
         switch config.storage.type {
         case "local":
-            let url = URL(fileURLWithPath: config.storage.path!)
+            guard let path = config.storage.path else {
+                throw InitError.unsupportedStorageType("local storage requires path")
+            }
+            let url = URL(fileURLWithPath: path)
             return LocalStorageAdapter(rootPath: url)
+
         case "s3":
-            throw InitError.s3NotYetSupported
+            guard let bucket = config.storage.bucket else {
+                throw InitError.unsupportedStorageType("S3 storage requires bucket")
+            }
+            let region = config.storage.region ?? "us-east-1"
+            return try await S3StorageAdapter(
+                region: region,
+                bucket: bucket,
+                keyPrefix: config.storage.prefix
+            )
+
         default:
             throw InitError.unsupportedStorageType(config.storage.type)
         }
@@ -323,20 +357,13 @@ private struct RepositoryMetadata: Codable {
 // MARK: - Errors
 
 private enum InitError: Error, CustomStringConvertible {
-    case s3NotYetSupported
+    case invalidS3URI(String)
     case unsupportedStorageType(String)
 
     var description: String {
         switch self {
-        case .s3NotYetSupported:
-            return """
-            S3 storage is not yet supported in v0.10.0.
-
-            For now, please use a local filesystem path:
-              $ akashica init --profile myproject /path/to/storage
-
-            S3 support will be added in a future release.
-            """
+        case .invalidS3URI(let detail):
+            return "Invalid S3 URI: \(detail)"
         case .unsupportedStorageType(let type):
             return "Unsupported storage type: '\(type)'"
         }

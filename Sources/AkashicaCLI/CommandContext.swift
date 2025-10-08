@@ -3,6 +3,7 @@ import ArgumentParser
 import Akashica
 import AkashicaCore
 import AkashicaStorage
+import AkashicaS3Storage
 
 /// Centralized context resolution for all CLI commands
 ///
@@ -50,7 +51,7 @@ struct CommandContext {
         let context = try await resolver.resolveContext(commandLineProfile: profileFlag)
 
         // Create storage adapter
-        let storageAdapter = try createStorageAdapter(config: context.profile)
+        let storageAdapter = try await createStorageAdapter(config: context.profile)
 
         return CommandContext(
             profile: context.profile,
@@ -60,13 +61,26 @@ struct CommandContext {
         )
     }
 
-    private static func createStorageAdapter(config: ProfileConfig) throws -> StorageAdapter {
+    private static func createStorageAdapter(config: ProfileConfig) async throws -> StorageAdapter {
         switch config.storage.type {
         case "local":
-            let url = URL(fileURLWithPath: config.storage.path!)
+            guard let path = config.storage.path else {
+                throw CommandContextError.missingStorageConfig("path required for local storage")
+            }
+            let url = URL(fileURLWithPath: path)
             return LocalStorageAdapter(rootPath: url)
+
         case "s3":
-            throw CommandContextError.s3NotYetSupported
+            guard let bucket = config.storage.bucket else {
+                throw CommandContextError.missingStorageConfig("bucket required for S3 storage")
+            }
+            let region = config.storage.region ?? "us-east-1"
+            return try await S3StorageAdapter(
+                region: region,
+                bucket: bucket,
+                keyPrefix: config.storage.prefix
+            )
+
         default:
             throw CommandContextError.unsupportedStorageType(config.storage.type)
         }
@@ -240,14 +254,14 @@ struct CommandContext {
 // MARK: - Errors
 
 enum CommandContextError: Error, CustomStringConvertible {
-    case s3NotYetSupported
+    case missingStorageConfig(String)
     case unsupportedStorageType(String)
     case invalidWorkspaceID(String)
 
     var description: String {
         switch self {
-        case .s3NotYetSupported:
-            return "S3 storage is not yet supported in v0.10.0"
+        case .missingStorageConfig(let detail):
+            return "Storage configuration error: \(detail)"
         case .unsupportedStorageType(let type):
             return "Unsupported storage type: '\(type)'"
         case .invalidWorkspaceID(let id):
