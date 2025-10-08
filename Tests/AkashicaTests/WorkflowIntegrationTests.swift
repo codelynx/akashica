@@ -472,6 +472,34 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertEqual(commits3.count, 0)
     }
 
+    // MARK: - Branch Reset Integration Tests
+
+    func testResetBranchIntegration() async throws {
+        // Create a commit chain: @1001 -> @1002 -> @1003
+        let commit1002 = try await createCommit(parent: CommitID(value: "@1001"), message: "Second")
+        let commit1003 = try await createCommit(parent: commit1002, message: "Third")
+
+        // Verify main points to @1003
+        let initialHead = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(initialHead, commit1003)
+
+        // Reset back to @1002
+        try await repository.resetBranch(name: "main", to: commit1002)
+
+        // Verify branch pointer updated
+        let afterReset = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(afterReset, commit1002)
+
+        // Verify we can still read files from @1002
+        let session = try await repository.session(branch: "main")
+        let fileExists = try await session.fileExists(at: RepositoryPath(string: "Second.txt"))
+        XCTAssertTrue(fileExists)
+
+        // Verify @1003 file is NOT accessible (orphaned)
+        let orphanedExists = try await session.fileExists(at: RepositoryPath(string: "Third.txt"))
+        XCTAssertFalse(orphanedExists)
+    }
+
     // MARK: - Helper for Branch Reset Tests
 
     private func createCommit(parent: CommitID, message: String) async throws -> CommitID {
