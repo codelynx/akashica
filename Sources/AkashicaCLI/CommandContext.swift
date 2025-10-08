@@ -126,18 +126,68 @@ struct CommandContext {
         return RepositoryPath(string: workspace.virtualCwd)
     }
 
-    /// Resolve URI path to absolute RepositoryPath
+    /// Resolve URI path to absolute RepositoryPath with normalization
     func resolvePathFromURI(_ uri: AkaURI) -> RepositoryPath {
         if uri.isRelativePath {
-            // Relative: resolve from virtual CWD
-            let combined = virtualCwd.pathString.hasSuffix("/")
-                ? virtualCwd.pathString + uri.path
-                : virtualCwd.pathString + "/" + uri.path
-            return RepositoryPath(string: combined)
+            // Relative: resolve from virtual CWD with normalization
+            return resolveRelativePath(uri.path, from: virtualCwd)
         } else {
-            // Absolute or scoped: use as-is
-            return RepositoryPath(string: uri.path)
+            // Absolute: normalize (handles ., .., //)
+            return normalizeAbsolutePath(uri.path)
         }
+    }
+
+    /// Resolve a relative path from a base directory with normalization
+    private func resolveRelativePath(_ input: String, from base: RepositoryPath) -> RepositoryPath {
+        var components = base.components
+
+        // Split input by '/' and process each segment
+        let segments = input.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+
+        for segment in segments {
+            if segment == "." {
+                // Current directory - skip
+                continue
+            } else if segment == ".." {
+                // Parent directory - pop last component
+                if !components.isEmpty {
+                    components.removeLast()
+                }
+                // If already at root, .. has no effect
+            } else {
+                // Regular component - append
+                components.append(segment)
+            }
+        }
+
+        return RepositoryPath(components: components)
+    }
+
+    /// Normalize an absolute path (handles ., .., //)
+    private func normalizeAbsolutePath(_ path: String) -> RepositoryPath {
+        var components: [String] = []
+
+        // Remove leading / and split
+        let cleaned = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let segments = cleaned.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+
+        for segment in segments {
+            if segment == "." {
+                // Current directory - skip
+                continue
+            } else if segment == ".." {
+                // Parent directory - pop last component
+                if !components.isEmpty {
+                    components.removeLast()
+                }
+                // If at root, .. has no effect
+            } else {
+                // Regular component
+                components.append(segment)
+            }
+        }
+
+        return RepositoryPath(components: components)
     }
 
     // MARK: - Workspace State Management
