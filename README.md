@@ -2,6 +2,15 @@
 
 A Swift content management system implementing a dual-tier workspace model with support for local filesystem and AWS S3 storage backends.
 
+> **⚠️ DEVELOPMENT SOFTWARE - USE AT YOUR OWN RISK**
+>
+> Akashica is currently under active development and **NOT RECOMMENDED FOR PRODUCTION USE**. This software is provided "as is" without warranty of any kind. The developers assume **NO RESPONSIBILITY** for:
+> - Data loss or corruption
+> - Service interruptions or downtime
+> - Any damages or losses arising from use of this software
+>
+> **Always maintain separate backups of critical data.** For production deployments, wait for a stable release (v1.0+) or contact the maintainers for enterprise support options.
+
 ## Overview
 
 Akashica provides a Git-like repository system for managing content with:
@@ -501,7 +510,27 @@ Contributions are welcome! Please:
 
 ## License
 
-[Your License Here]
+MIT License
+
+Copyright (c) 2025 Kaz Yoshikawa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+**THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.**
 
 ## Acknowledgments
 
