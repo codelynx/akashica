@@ -41,8 +41,13 @@ struct View: AsyncParsableCommand {
 
         let commit = CommitID(value: commitID)
 
-        // Verify commit exists (will throw if not found)
-        _ = try await context.repository.view(at: commit)
+        // Verify commit exists by reading metadata (will throw if not found)
+        do {
+            _ = try await context.repository.commitMetadata(commit)
+        } catch {
+            print("Error: Commit '\(commitID)' not found")
+            throw ExitCode.failure
+        }
 
         // Enter view mode
         try await context.enterView(commit: commit)
