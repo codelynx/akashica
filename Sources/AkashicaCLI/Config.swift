@@ -199,6 +199,33 @@ struct Config {
 
         return WorkspaceID(baseCommit: baseCommit, workspaceSuffix: suffix)
     }
+
+    // MARK: - View Mode
+
+    /// Read current view commit from .akashica/VIEW
+    func currentView() -> CommitID? {
+        let viewPath = akashicaPath.appendingPathComponent("VIEW")
+
+        guard FileManager.default.fileExists(atPath: viewPath.path),
+              let viewRef = try? String(contentsOf: viewPath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return nil
+        }
+
+        return CommitID(value: viewRef)
+    }
+
+    /// Save current view commit to .akashica/VIEW
+    func saveView(_ commit: CommitID) throws {
+        let viewPath = akashicaPath.appendingPathComponent("VIEW")
+        try commit.value.write(to: viewPath, atomically: true, encoding: .utf8)
+    }
+
+    /// Clear view mode
+    func clearView() throws {
+        let viewPath = akashicaPath.appendingPathComponent("VIEW")
+        try? FileManager.default.removeItem(at: viewPath)
+    }
 }
 
 /// Storage configuration options

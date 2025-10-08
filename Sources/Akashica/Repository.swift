@@ -42,6 +42,28 @@ public actor AkashicaRepository {
         )
     }
 
+    // MARK: - Convenience Methods
+
+    /// Create a read-only view at a specific commit
+    ///
+    /// This is a convenience method that creates a session pointing to a specific
+    /// commit in the history chain. Use this to inspect the state of the repository
+    /// at any point in time.
+    ///
+    /// Example:
+    /// ```swift
+    /// // Given chain: @1000 <- @1020 <- @1125
+    /// let view = repo.view(at: CommitID(value: "@1020"))
+    /// let files = try await view.listDirectory("/")
+    /// // Returns files as they were at @1020
+    /// ```
+    ///
+    /// - Parameter commitID: The commit to view
+    /// - Returns: A read-only session at that commit
+    public func view(at commitID: CommitID) -> AkashicaSession {
+        session(commit: commitID)
+    }
+
     // MARK: - Workspace Creation
 
     /// Create new workspace from commit

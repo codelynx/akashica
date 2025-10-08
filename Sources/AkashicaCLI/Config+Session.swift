@@ -4,6 +4,13 @@ import ArgumentParser
 
 extension Config {
     /// Get or create a session for the given URI scope
+    ///
+    /// Precedence order:
+    /// 1. Explicit scope from aka:// URI (highest priority)
+    /// 2. Current view mode (.akashica/VIEW)
+    /// 3. Current workspace (.akashica/WORKSPACE)
+    /// 4. Error: No active context
+    ///
     /// - Parameter scope: The scope from an AkaURI (currentWorkspace, branch, or commit)
     /// - Returns: A session appropriate for the scope
     /// - Throws: ExitCode.failure if no workspace is active, branch doesn't exist, etc.
@@ -12,10 +19,17 @@ extension Config {
 
         switch scope {
         case .currentWorkspace:
-            // Get current workspace ID from config
+            // Check for explicit context in order of precedence
+            // 1. View mode takes precedence
+            if let viewCommit = currentView() {
+                return await repo.view(at: viewCommit)
+            }
+
+            // 2. Workspace mode
             guard let workspaceID = try currentWorkspace() else {
-                print("Error: No active workspace")
+                print("Error: No active workspace or view")
                 print("Run 'akashica checkout <branch>' to create a workspace")
+                print("Or 'akashica view @<commit>' to enter view mode")
                 throw ExitCode.failure
             }
             return await repo.session(workspace: workspaceID)
@@ -32,7 +46,7 @@ extension Config {
 
         case .commit(let commitID):
             // Get session for specific commit
-            return await repo.session(commit: commitID)
+            return await repo.view(at: commitID)
         }
     }
 
