@@ -8,7 +8,8 @@ struct View: AsyncParsableCommand {
         abstract: "Enter read-only view mode at a specific commit"
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "Commit ID to view (e.g., '@1020')")
     var commitID: String?
@@ -17,11 +18,11 @@ struct View: AsyncParsableCommand {
     var exit: Bool = false
 
     func run() async throws {
-        let config = storage.makeConfig()
+        var context = try await CommandContext.resolve(profileFlag: profile)
 
         // Handle --exit flag
         if exit {
-            try exitViewMode(config: config)
+            try await exitViewMode(context: &context)
             return
         }
 
@@ -40,36 +41,14 @@ struct View: AsyncParsableCommand {
 
         let commit = CommitID(value: commitID)
 
-        // Create validated storage
-        let storageAdapter = try await config.createValidatedStorage()
+        // Verify commit exists (will throw if not found)
+        _ = try await context.repository.view(at: commit)
 
-        // Verify commit exists
-        do {
-            _ = try await storageAdapter.readCommitMetadata(commit: commit)
-        } catch {
-            print("Error: Commit '\(commitID)' not found")
-            throw ExitCode.failure
-        }
+        // Enter view mode
+        try await context.enterView(commit: commit)
 
-        // Ensure .akashica directory exists
-        if !FileManager.default.fileExists(atPath: config.akashicaPath.path) {
-            try FileManager.default.createDirectory(
-                at: config.akashicaPath,
-                withIntermediateDirectories: true
-            )
-        }
-
-        // Save view reference
-        try config.saveView(commit)
-
-        // Clear workspace if any (view mode is exclusive)
-        if try config.currentWorkspace() != nil {
-            try config.clearWorkspace()
-        }
-
-        // Initialize virtual CWD to root
-        let vctx = config.virtualContext()
-        try vctx.initialize()
+        // Reset virtual CWD to root
+        try await context.updateVirtualCwd(RepositoryPath(string: "/"))
 
         print("Entered read-only view mode at \(commitID)")
         print("Virtual CWD: /")
@@ -78,13 +57,13 @@ struct View: AsyncParsableCommand {
         print("To exit view mode: akashica view --exit")
     }
 
-    private func exitViewMode(config: Config) throws {
-        guard config.currentView() != nil else {
+    private func exitViewMode(context: inout CommandContext) async throws {
+        guard context.workspace.view.active else {
             print("Not in view mode")
             return
         }
 
-        try config.clearView()
+        try await context.exitView()
         print("Exited view mode")
         print("")
         print("Run 'akashica checkout <branch>' to create a workspace")
