@@ -17,24 +17,22 @@ struct Diff: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "File path to show diff for (aka:// URI, optional)")
     var path: String?
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
 
-        // Create validated repository (efficient - one S3 adapter creation)
-        let repo = try await config.createValidatedRepository()
+        // Note: diff currently only works with workspace mode
+        // View mode will naturally fail when trying to get workspace
+        // TODO: Add --from/--to commit support for view mode compatibility
 
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Not in a workspace. Use 'akashica checkout' to create one.")
-            throw ExitCode.failure
-        }
-
-        let session = await repo.session(workspace: workspace)
+        // Get workspace and session
+        let workspace = try context.currentWorkspaceID()
+        let session = await context.repository.session(workspace: workspace)
         let status = try await session.status()
 
         // Parse path if specified (must be current workspace URI)
@@ -46,7 +44,7 @@ struct Diff: AsyncParsableCommand {
                 print("Use aka:/ or aka:/// for workspace paths")
                 throw ExitCode.failure
             }
-            targetPath = try config.resolvePathFromURI(uri)
+            targetPath = context.resolvePathFromURI(uri)
         } else {
             targetPath = nil
         }

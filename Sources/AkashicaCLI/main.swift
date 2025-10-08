@@ -10,6 +10,7 @@ struct AkashicaCLI: AsyncParsableCommand {
         version: "0.9.0",
         subcommands: [
             Init.self,
+            Profile.self,
             Checkout.self,
             View.self,
             Commit.self,

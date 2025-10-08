@@ -3,83 +3,229 @@ import Foundation
 import Akashica
 import AkashicaCore
 import AkashicaStorage
+import AkashicaS3Storage
 
 struct Init: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Initialize a new Akashica repository"
+        abstract: "Initialize a new Akashica profile and repository"
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name")
+    var profile: String
+
+    @Argument(help: "Storage path (local path or s3:// URI)")
+    var storagePath: String
 
     @Option(name: .long, help: "Initial branch name")
     var branch: String = "main"
 
     func run() async throws {
-        // If no storage options provided, check if already initialized first
-        let isInteractive = storage.s3Bucket == nil && storage.repo == nil
+        let profileManager = ProfileManager()
+        let stateManager = WorkspaceStateManager()
 
-        if isInteractive {
-            // Check if already initialized (local check only for interactive mode)
-            let tempConfig = storage.makeConfig()
-            if tempConfig.isInRepository {
-                print("Error: Repository already initialized at \(tempConfig.akashicaPath.path)")
-                throw ExitCode.failure
-            }
-        }
-
-        // Interactive prompts if no flags provided
-        var finalStorage = storage
-        if isInteractive {
-            let (bucket, region, prefix) = try promptForStorageConfig()
-            finalStorage.s3Bucket = bucket
-            finalStorage.s3Region = region
-            finalStorage.s3Prefix = prefix
-        }
-
-        let config = finalStorage.makeConfig()
-
-        // Check if already initialized (for S3 or when flags were provided)
-        if config.s3Bucket != nil {
-            // S3 mode: Check if repository exists in bucket
-            if try await config.s3RepositoryExists() {
-                print("Error: Repository already initialized in S3 bucket '\(config.s3Bucket!)'")
-                if let prefix = config.s3Prefix {
-                    print("  Prefix: \(prefix)")
-                }
-                throw ExitCode.failure
-            }
-        } else {
-            // Local mode: Check for .akashica directory (non-interactive path)
-            if !isInteractive && config.isInRepository {
-                print("Error: Repository already initialized at \(config.akashicaPath.path)")
-                throw ExitCode.failure
-            }
-        }
-
-        // Initialize repository in storage backend FIRST
-        // Only create local files if this succeeds
-        let storageAdapter: StorageAdapter
-        do {
-            storageAdapter = try await config.createStorage()
-        } catch {
-            // Provide helpful error message for S3 failures
-            if config.s3Bucket != nil {
-                print("Error: Failed to connect to S3 bucket '\(config.s3Bucket!)'")
-                print("")
-                print("Common causes:")
-                print("  - Bucket does not exist: Run 'aws s3 mb s3://\(config.s3Bucket!)'")
-                print("  - Missing AWS credentials: Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")
-                print("  - Incorrect region: Verify bucket is in '\(config.s3Region ?? "us-east-1")'")
-                print("  - Insufficient permissions: Ensure IAM policy allows s3:GetObject, s3:PutObject, s3:ListBucket")
-                print("")
-                print("You can retry 'akashica init' after fixing the issue.")
-            }
+        // Check if profile already exists
+        if await profileManager.profileExists(name: profile) {
+            print("Error: Profile '\(profile)' already exists.")
+            print("")
+            print("Use a different profile name or delete the existing profile:")
+            print("  $ akashica profile delete \(profile)")
             throw ExitCode.failure
         }
 
+        // Parse storage path and create profile config
+        let profileConfig: ProfileConfig
+        do {
+            profileConfig = try parseStoragePath(storagePath, profileName: profile)
+        } catch {
+            print("Error: \(error)")
+            throw ExitCode.failure
+        }
+
+        // Detect or create repository
+        print("Checking repository at \(storageDisplayPath(profileConfig.storage))...")
+
+        let repositoryExists: Bool
+        let repositoryId: String
+
+        do {
+            // Try to detect repository
+            let detector = RepositoryDetector(storage: profileConfig.storage)
+            let result = try await detector.detect()
+
+            switch result {
+            case .found(let metadata):
+                repositoryExists = true
+                repositoryId = metadata.repositoryId
+                print("✓ Found existing repository: \(repositoryId)")
+                print("")
+
+                // Attach to existing repository
+                print("Attach to this repository? [Y/n]: ", terminator: "")
+                fflush(stdout)
+
+                let response = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? "y"
+                if response != "y" && response != "yes" && !response.isEmpty {
+                    print("Cancelled.")
+                    throw ExitCode.success
+                }
+
+            case .notFound:
+                repositoryExists = false
+                repositoryId = profileConfig.storage.path?.split(separator: "/").last.map(String.init)
+                    ?? profileConfig.storage.bucket
+                    ?? "repository"
+
+                print("✗ Repository not found")
+                print("")
+                print("Create new repository? [Y/n]: ", terminator: "")
+                fflush(stdout)
+
+                let response = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? "y"
+                if response != "y" && response != "yes" && !response.isEmpty {
+                    print("Cancelled.")
+                    throw ExitCode.success
+                }
+
+                // Create repository
+                try await createRepository(config: profileConfig, branch: branch)
+                print("")
+                print("✓ Created repository at \(storageDisplayPath(profileConfig.storage))")
+
+            case .corrupted(let details):
+                print("Error: Repository appears corrupted")
+                print(details)
+                throw ExitCode.failure
+            }
+        } catch {
+            print("Error checking repository: \(error)")
+            throw ExitCode.failure
+        }
+
+        // Save profile configuration
+        do {
+            try await profileManager.saveProfile(profileConfig)
+            print("✓ Saved profile: ~/.akashica/configurations/\(profile).json")
+        } catch {
+            print("Error saving profile: \(error)")
+            throw ExitCode.failure
+        }
+
+        // Create workspace state
+        let initialCommit = repositoryExists
+            ? try await getCurrentCommit(config: profileConfig, branch: branch)
+            : CommitID(value: "@0")
+
+        let workspaceId = generateWorkspaceId(baseCommit: initialCommit)
+        let workspaceState = WorkspaceState(
+            profile: profile,
+            workspaceId: workspaceId.fullReference,
+            baseCommit: initialCommit.value,
+            virtualCwd: "/"
+        )
+
+        do {
+            try await stateManager.saveState(workspaceState)
+            print("✓ Workspace state: ~/.akashica/workspaces/\(profile)/state.json")
+        } catch {
+            print("Error saving workspace state: \(error)")
+            throw ExitCode.failure
+        }
+
+        print("")
+        print("To use this profile:")
+        print("  export AKASHICA_PROFILE=\(profile)")
+        print("")
+        print("You can now run akashica commands from any directory.")
+    }
+
+    // MARK: - Storage Path Parsing
+
+    private func parseStoragePath(_ path: String, profileName: String) throws -> ProfileConfig {
+        if path.hasPrefix("s3://") {
+            // Parse S3 URI: s3://bucket/prefix
+            let withoutScheme = String(path.dropFirst(5)) // Remove "s3://"
+            let components = withoutScheme.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+
+            guard !components.isEmpty else {
+                throw InitError.invalidS3URI("Bucket name is required (e.g., s3://my-bucket/prefix)")
+            }
+
+            let bucket = String(components[0])
+            let prefix = components.count > 1 ? String(components[1]) : nil
+
+            // Prompt for AWS region
+            print("AWS Region [us-east-1]: ", terminator: "")
+            fflush(stdout)
+            let regionInput = readLine()?.trimmingCharacters(in: .whitespaces)
+            let region = (regionInput?.isEmpty ?? true) ? "us-east-1" : regionInput!
+            print("")
+
+            return ProfileConfig(
+                name: profileName,
+                storage: .s3(bucket: bucket, prefix: prefix, region: region)
+            )
+        } else {
+            // Local filesystem path
+            return ProfileConfig(
+                name: profileName,
+                storage: .local(path: path)
+            )
+        }
+    }
+
+    private func storageDisplayPath(_ storage: ProfileConfig.StorageConfig) -> String {
+        switch storage.type {
+        case "s3":
+            let bucket = storage.bucket!
+            if let prefix = storage.prefix, !prefix.isEmpty {
+                return "s3://\(bucket)/\(prefix)"
+            }
+            return "s3://\(bucket)"
+        default:
+            return storage.path!
+        }
+    }
+
+    // MARK: - Repository Creation
+
+    private func ensureStorageDirectoryExists(config: ProfileConfig) throws {
+        switch config.storage.type {
+        case "local":
+            let url = URL(fileURLWithPath: config.storage.path!)
+            try FileManager.default.createDirectory(
+                at: url,
+                withIntermediateDirectories: true
+            )
+        case "s3":
+            // S3 doesn't require directory creation
+            break
+        default:
+            break
+        }
+    }
+
+    private func createRepository(config: ProfileConfig, branch: String) async throws {
+        // Ensure storage directory exists before any writes
+        try ensureStorageDirectoryExists(config: config)
+
+        let storageAdapter = try await createStorageAdapter(config: config)
+
+        // Create repository metadata
+        let repositoryId = config.storage.path?.split(separator: "/").last.map(String.init)
+            ?? config.storage.bucket
+            ?? "repository"
+
+        let metadata = RepositoryMetadata(
+            version: "1.0",
+            repositoryId: repositoryId,
+            created: Date()
+        )
+
+        try await storageAdapter.writeRepositoryMetadata(metadata)
+
         // Create initial empty commit
         let initialCommit = CommitID(value: "@0")
-        let metadata = CommitMetadata(
+        let commitMetadata = CommitMetadata(
             message: "Initial commit",
             author: getAuthorName(),
             timestamp: Date(),
@@ -90,115 +236,58 @@ struct Init: AsyncParsableCommand {
         let builder = ManifestBuilder()
         let emptyManifest = builder.build(entries: [])
 
-        // Write commit to storage (this may fail for S3 if bucket doesn't exist)
-        do {
-            try await storageAdapter.writeRootManifest(commit: initialCommit, data: emptyManifest)
-            try await storageAdapter.writeCommitMetadata(commit: initialCommit, metadata: metadata)
+        // Write commit to storage
+        try await storageAdapter.writeRootManifest(commit: initialCommit, data: emptyManifest)
+        try await storageAdapter.writeCommitMetadata(commit: initialCommit, metadata: commitMetadata)
 
-            // Create branch
-            let expectedCurrent: CommitID? = nil
-            try await storageAdapter.updateBranch(
-                name: branch,
-                expectedCurrent: expectedCurrent,
-                newCommit: initialCommit
-            )
-        } catch {
-            // Provide helpful error for S3 initialization failures
-            if config.s3Bucket != nil {
-                print("Error: Failed to initialize S3 repository")
-                print("")
-                print("Ensure:")
-                print("  - S3 bucket '\(config.s3Bucket!)' exists and is accessible")
-                print("  - AWS credentials are valid")
-                print("  - IAM permissions allow s3:PutObject and s3:ListBucket")
-                print("")
-                print("You can retry 'akashica init' after fixing the issue.")
-            }
-            throw ExitCode.failure
-        }
-
-        // SUCCESS! Now create .akashica directory and save config
-        // Both local and S3 modes need .akashica/ for config, CWD, and workspace tracking
-        try FileManager.default.createDirectory(
-            at: config.akashicaPath,
-            withIntermediateDirectories: true
+        // Create branch
+        try await storageAdapter.updateBranch(
+            name: branch,
+            expectedCurrent: nil,
+            newCommit: initialCommit
         )
-        try saveConfig(config: config)
-
-        if let bucket = config.s3Bucket {
-            print("Initialized empty Akashica repository in S3 bucket '\(bucket)'")
-            if let prefix = config.s3Prefix {
-                print("  Prefix: \(prefix)")
-            }
-        } else {
-            print("Initialized empty Akashica repository in \(config.akashicaPath.path)")
-        }
-        print("Created branch '\(branch)' at \(initialCommit.value)")
     }
 
-    /// Prompt user for storage configuration interactively
-    private func promptForStorageConfig() throws -> (s3Bucket: String?, s3Region: String?, s3Prefix: String?) {
-        print("Configure storage for your Akashica repository:")
-        print("")
-        print("Storage type:")
-        print("  1) Local filesystem (current directory)")
-        print("  2) AWS S3 (cloud storage)")
-        print("")
-        print("Enter choice [1-2]: ", terminator: "")
-        fflush(stdout)
+    private func getCurrentCommit(config: ProfileConfig, branch: String) async throws -> CommitID {
+        let storageAdapter = try await createStorageAdapter(config: config)
+        let branchPointer = try await storageAdapter.readBranch(name: branch)
+        return branchPointer.head
+    }
 
-        guard let input = readLine()?.trimmingCharacters(in: .whitespaces) else {
-            throw ExitCode.failure
-        }
-
-        switch input {
-        case "1":
-            // Local storage - use defaults
-            return (nil, nil, nil)
-
-        case "2":
-            // S3 storage - prompt for details
-            print("")
-            print("S3 bucket name: ", terminator: "")
-            fflush(stdout)
-            guard let bucket = readLine()?.trimmingCharacters(in: .whitespaces), !bucket.isEmpty else {
-                print("Error: S3 bucket name is required")
-                throw ExitCode.failure
+    private func createStorageAdapter(config: ProfileConfig) async throws -> StorageAdapter {
+        switch config.storage.type {
+        case "local":
+            guard let path = config.storage.path else {
+                throw InitError.unsupportedStorageType("local storage requires path")
             }
+            let url = URL(fileURLWithPath: path)
+            return LocalStorageAdapter(rootPath: url)
 
-            print("AWS region [us-east-1]: ", terminator: "")
-            fflush(stdout)
-            let regionInput = readLine()?.trimmingCharacters(in: .whitespaces)
-            let region = (regionInput?.isEmpty ?? true) ? "us-east-1" : regionInput
-
-            print("S3 key prefix (optional, press Enter to skip): ", terminator: "")
-            fflush(stdout)
-            let prefixInput = readLine()?.trimmingCharacters(in: .whitespaces)
-            let prefix = (prefixInput?.isEmpty ?? true) ? nil : prefixInput
-
-            print("")
-            return (bucket, region, prefix)
+        case "s3":
+            guard let bucket = config.storage.bucket else {
+                throw InitError.unsupportedStorageType("S3 storage requires bucket")
+            }
+            let region = config.storage.region ?? "us-east-1"
+            return try await S3StorageAdapter(
+                region: region,
+                bucket: bucket,
+                keyPrefix: config.storage.prefix
+            )
 
         default:
-            print("Error: Invalid choice. Please enter 1 or 2.")
-            throw ExitCode.failure
+            throw InitError.unsupportedStorageType(config.storage.type)
         }
     }
 
-    /// Save configuration to .akashica/config.json
-    private func saveConfig(config: Config) throws {
-        let configFile = ConfigFile(storage: ConfigFile.StorageConfig(
-            type: config.s3Bucket != nil ? "s3" : "local",
-            bucket: config.s3Bucket,
-            region: config.s3Region,
-            prefix: config.s3Prefix,
-            credentials: nil
-        ))
+    // MARK: - Workspace ID Generation
 
-        try configFile.write(to: config.akashicaPath)
+    private func generateWorkspaceId(baseCommit: CommitID) -> WorkspaceID {
+        let suffix = String(UUID().uuidString.prefix(8).lowercased())
+        return WorkspaceID(baseCommit: baseCommit, workspaceSuffix: suffix)
     }
 
-    /// Get author name from environment or default
+    // MARK: - Author Name
+
     private func getAuthorName() -> String {
         // Try git config
         if let gitUser = try? String(
@@ -213,5 +302,87 @@ struct Init: AsyncParsableCommand {
 
         // Fall back to USER environment variable
         return ProcessInfo.processInfo.environment["USER"] ?? "unknown"
+    }
+}
+
+// MARK: - Repository Detection
+
+private struct RepositoryDetector {
+    let storage: ProfileConfig.StorageConfig
+
+    enum DetectionResult {
+        case found(RepositoryMetadata)
+        case notFound
+        case corrupted(String)
+    }
+
+    func detect() async throws -> DetectionResult {
+        // For now, only support local detection
+        guard storage.type == "local" else {
+            return .notFound
+        }
+
+        let url = URL(fileURLWithPath: storage.path!)
+        let fm = FileManager.default
+
+        let branchesPath = url.appendingPathComponent("branches")
+        let metadataPath = url.appendingPathComponent(".akashica.json")
+
+        // Check if repository marker exists
+        if fm.fileExists(atPath: metadataPath.path) {
+            // Read metadata
+            let data = try Data(contentsOf: metadataPath)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let metadata = try decoder.decode(RepositoryMetadata.self, from: data)
+            return .found(metadata)
+        }
+
+        // Check for legacy structure (branches/)
+        if fm.fileExists(atPath: branchesPath.path) {
+            // Has branches but no metadata - corrupted or legacy
+            return .corrupted("Repository appears to be an older version without .akashica.json")
+        }
+
+        return .notFound
+    }
+}
+
+private struct RepositoryMetadata: Codable {
+    let version: String
+    let repositoryId: String
+    let created: Date
+}
+
+// MARK: - Errors
+
+private enum InitError: Error, CustomStringConvertible {
+    case invalidS3URI(String)
+    case unsupportedStorageType(String)
+
+    var description: String {
+        switch self {
+        case .invalidS3URI(let detail):
+            return "Invalid S3 URI: \(detail)"
+        case .unsupportedStorageType(let type):
+            return "Unsupported storage type: '\(type)'"
+        }
+    }
+}
+
+// MARK: - Storage Adapter Extension
+
+extension StorageAdapter {
+    fileprivate func writeRepositoryMetadata(_ metadata: RepositoryMetadata) async throws {
+        guard let adapter = self as? LocalStorageAdapter else {
+            fatalError("Only LocalStorageAdapter supports repository metadata")
+        }
+
+        let path = adapter.rootPath.appendingPathComponent(".akashica.json")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(metadata)
+        try data.write(to: path)
     }
 }

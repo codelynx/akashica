@@ -17,13 +17,21 @@ struct Rm: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "File path to remove (aka:// URI)")
     var path: String
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
+
+        // Check if in view mode
+        if context.workspace.view.active {
+            print("Error: Cannot remove files in view mode")
+            print("Exit view mode first: akashica view --exit")
+            throw ExitCode.failure
+        }
 
         // Parse URI
         let uri = try AkaURI.parse(path)
@@ -36,8 +44,8 @@ struct Rm: AsyncParsableCommand {
         }
 
         // Get session and resolve path
-        let session = try await config.getSession(for: uri.scope)
-        let targetPath = try config.resolvePathFromURI(uri)
+        let session = try await context.getSession(for: uri.scope)
+        let targetPath = context.resolvePathFromURI(uri)
 
         // Delete file
         do {

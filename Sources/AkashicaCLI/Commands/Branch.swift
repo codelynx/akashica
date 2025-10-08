@@ -22,14 +22,13 @@ extension Branch {
             abstract: "List all branches"
         )
 
-        @OptionGroup var storage: StorageOptions
+        @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+        var profile: String?
 
         func run() async throws {
-            let config = storage.makeConfig()
+            let context = try await CommandContext.resolve(profileFlag: profile)
 
-            // Create validated repository (efficient - one S3 adapter creation)
-            let repo = try await config.createValidatedRepository()
-            let branches = try await repo.branches()
+            let branches = try await context.repository.branches()
 
             if branches.isEmpty {
                 print("No branches found")
@@ -52,7 +51,8 @@ extension Branch {
             abstract: "Reset branch pointer to a specific commit"
         )
 
-        @OptionGroup var storage: StorageOptions
+        @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+        var profile: String?
 
         @Argument(help: "Branch name to reset")
         var branchName: String
@@ -64,7 +64,7 @@ extension Branch {
         var force: Bool = false
 
         func run() async throws {
-            let config = storage.makeConfig()
+            let context = try await CommandContext.resolve(profileFlag: profile)
 
             // Parse target commit ID
             guard to.hasPrefix("@") else {
@@ -74,13 +74,10 @@ extension Branch {
 
             let targetCommit = CommitID(value: to)
 
-            // Create validated repository
-            let repo = try await config.createValidatedRepository()
-
             // Get current commit for display (may throw if branch doesn't exist)
             let currentCommit: CommitID
             do {
-                currentCommit = try await repo.currentCommit(branch: branchName)
+                currentCommit = try await context.repository.currentCommit(branch: branchName)
             } catch {
                 // Branch doesn't exist - storage throws raw Foundation error
                 print("Error: Branch '\(branchName)' not found")
@@ -89,7 +86,7 @@ extension Branch {
 
             // Perform reset
             do {
-                try await repo.resetBranch(name: branchName, to: targetCommit, force: force)
+                try await context.repository.resetBranch(name: branchName, to: targetCommit, force: force)
             } catch AkashicaError.branchNotFound(let name) {
                 print("Error: Branch '\(name)' not found")
                 throw ExitCode.failure

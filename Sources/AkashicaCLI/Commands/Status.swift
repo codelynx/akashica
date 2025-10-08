@@ -15,21 +15,21 @@ struct Status: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
 
-        // Create validated repository (efficient - one S3 adapter creation)
-        let repo = try await config.createValidatedRepository()
-
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Not in a workspace. Use 'akashica checkout' to create one.")
+        // Check if in view mode
+        if context.workspace.view.active {
+            print("Error: Cannot show status in view mode")
+            print("Exit view mode first: akashica view --exit")
             throw ExitCode.failure
         }
 
-        let session = await repo.session(workspace: workspace)
+        let workspace = try context.currentWorkspaceID()
+        let session = await context.repository.session(workspace: workspace)
         let status = try await session.status()
 
         // Print status

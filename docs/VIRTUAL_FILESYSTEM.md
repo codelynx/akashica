@@ -1,17 +1,22 @@
 # Virtual Filesystem Quick Reference
 
-**Version:** 0.1.0
-**Status:** Production Ready (Local), Ready for S3 Testing
+**Version:** 1.0.0
+**Status:** Production Ready (v0.10.0+)
 
 ## Overview
 
-Akashica provides a virtual filesystem interface that lets you navigate and manage remote content stores (S3, NAS) as if they were local filesystems, without downloading everything to your local machine.
+Akashica provides a virtual filesystem interface that lets you navigate and manage remote content stores (S3, NAS) as if they were local filesystems, without downloading everything to your local machine. This guide is a quick reference for the v0.10.0 profile-based architecture.
 
 ## Quick Start
 
 ```bash
-# Initialize repository
-akashica init
+# Initialize profile and repository
+akashica init --profile my-project /Volumes/NAS/repos/my-project
+# Or for S3:
+# akashica init --profile my-project s3://my-bucket/repos/my-project
+
+# Set active profile
+export AKASHICA_PROFILE=my-project
 
 # Create workspace from branch
 akashica checkout main
@@ -20,29 +25,29 @@ akashica checkout main
 akashica pwd
 # Output: /
 
-# Upload a file
-akashica cp ~/photo.jpg vacation.jpg
+# Upload a file (use aka: prefix for repository paths)
+akashica cp ~/photo.jpg aka:vacation.jpg
 
 # List contents
 akashica ls
 # Output: vacation.jpg  (2.4M)
 
 # Create nested structure
-akashica cp ~/doc.pdf /projects/2024/report.pdf
+akashica cp ~/doc.pdf aka:/projects/2024/report.pdf
 
 # Navigate
 akashica cd /projects/2024
 akashica pwd
-# Output: projects/2024
+# Output: /projects/2024
 
 akashica ls
 # Output: report.pdf  (450K)
 
 # View file
-akashica cat report.pdf > /tmp/downloaded.pdf
+akashica cat aka:report.pdf > /tmp/downloaded.pdf
 
 # Download file
-akashica cp report.pdf ~/Desktop/
+akashica cp aka:report.pdf ~/Desktop/
 
 # Check changes
 akashica status
@@ -74,50 +79,46 @@ akashica commit -m "Add project files"
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `init` | Initialize repository | `akashica init` |
+| `init --profile <name> <path>` | Initialize profile and repository | `akashica init --profile proj /path` |
 | `checkout <branch>` | Create workspace from branch | `akashica checkout main` |
 | `status` | Show workspace changes | `akashica status` |
 | `commit -m "msg"` | Publish workspace to branch | `akashica commit -m "Update"` |
 | `log` | Show commit history | `akashica log` |
 | `branch` | List branches | `akashica branch` |
 
-## Path Detection Rules
+## aka:// URI Rules
 
-The `cp` command automatically detects local vs remote paths:
+**In v0.10.0, repository paths MUST use the `aka:` prefix** to distinguish them from local filesystem paths.
 
-### Remote Paths (Virtual Filesystem)
-- **Bare names**: `banana.txt`
-- **Paths with slashes**: `foo/bar.txt`, `dir/file.pdf`
-- **Absolute repo paths**: `/japan/tokyo/file.txt`
-- **Explicit prefix**: `remote:/path/to/file`
+### Repository Paths (aka:// URIs)
+- **Absolute**: `aka:/docs/file.pdf` - Always refers to `/docs/file.pdf`
+- **Relative**: `aka:file.pdf` - Resolved from virtual CWD
+- **Parent directory**: `aka:../other/file.pdf` - Relative navigation
 
 ### Local Paths (Your Computer)
 - **Home directory**: `~/Desktop/file.txt`
-- **Relative to local dir**: `./file.txt`, `../parent/file.txt`
-- **Explicit prefix**: `local:/tmp/file.txt`
+- **Relative to shell CWD**: `./file.txt`, `../parent/file.txt`
+- **Absolute local paths**: `/tmp/file.txt`, `/Users/name/file.txt`
 
 ### Examples
 
 ```bash
-# ✅ Upload from local to remote
-akashica cp ./photo.jpg vacation.jpg
-akashica cp ~/Desktop/report.pdf /projects/report.pdf
+# ✅ Upload from local to remote (aka: prefix required)
+akashica cp ~/photo.jpg aka:vacation.jpg
+akashica cp ~/Desktop/report.pdf aka:/projects/report.pdf
 
-# ✅ Download from remote to local
-akashica cp vacation.jpg ./downloaded.jpg
-akashica cp /projects/report.pdf ~/Desktop/
+# ✅ Download from remote to local (aka: prefix required)
+akashica cp aka:vacation.jpg ~/Downloads/vacation.jpg
+akashica cp aka:/projects/report.pdf ~/Desktop/
 
-# ✅ Explicit prefixes (when ambiguous)
-akashica cp local:/tmp/file.txt remote:/docs/file.txt
+# ✅ Relative repository paths (from virtual CWD)
+akashica cd /marketing
+akashica cp ~/logo.png aka:logo.png  # → /marketing/logo.png
+akashica cp aka:../docs/file.pdf ~/Desktop/  # → /docs/file.pdf
 
-# ⚠️ Absolute paths are REMOTE by default
-akashica cp report.pdf /tmp/out.pdf
-# Error: remote-to-remote not supported
-# This fails because /tmp/out.pdf is treated as a repository path!
-
-# ✅ Use local: prefix for absolute local paths
-akashica cp report.pdf local:/tmp/out.pdf
-# Now /tmp/out.pdf is correctly recognized as your local filesystem
+# ❌ Missing aka: prefix
+akashica cp ~/file.txt vacation.jpg
+# Error: Repository paths must use aka: prefix
 ```
 
 ## Path Navigation
@@ -165,84 +166,83 @@ akashica commit -m "Update files"
 # Workspace is now closed
 ```
 
-## S3 Configuration
+## Profile-Based Configuration (v0.10.0)
 
-### Option 1: Command-line flags (Quick testing)
+### Creating Profiles
 
+**Local storage (NAS)**:
 ```bash
-akashica init --s3-bucket my-bucket --s3-region us-west-2
-akashica checkout --s3-bucket my-bucket main
-akashica cp ./file.txt doc.txt --s3-bucket my-bucket
+akashica init --profile my-project /Volumes/NAS/repos/my-project
+export AKASHICA_PROFILE=my-project
 ```
 
-### Option 2: Config file (Recommended)
+**S3 storage**:
+```bash
+akashica init --profile my-project s3://my-bucket/repos/my-project
+# Prompts for AWS region interactively
+export AKASHICA_PROFILE=my-project
+```
 
-Create `.akashica/config.json`:
+### Profile Storage
 
+Profiles stored in `~/.akashica/configurations/{profile}.json`:
+
+**Local profile**:
 ```json
 {
+  "version": "1.0",
+  "name": "my-project",
   "storage": {
-    "type": "s3",
-    "bucket": "my-content-bucket",
-    "region": "us-west-2",
-    "prefix": "projects/",
-    "credentials": {
-      "mode": "chain"
-    }
+    "type": "local",
+    "path": "/Volumes/NAS/repos/my-project"
   },
-  "ui": {
-    "color": true,
-    "progress": true
-  }
+  "created": "2025-10-08T10:30:00Z"
 }
 ```
 
-Then use commands without flags:
-```bash
-akashica checkout main
-akashica cp ./file.txt doc.txt
+**S3 profile**:
+```json
+{
+  "version": "1.0",
+  "name": "my-project",
+  "storage": {
+    "type": "s3",
+    "bucket": "my-bucket",
+    "prefix": "repos/my-project",
+    "region": "us-west-2"
+  },
+  "created": "2025-10-08T10:30:00Z"
+}
 ```
 
-### Authentication
+### AWS Authentication
 
-**Recommended:** Use AWS credential chain
+**S3 profiles use AWS credential chain** (no credentials stored in Akashica config):
 - Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
 - `~/.aws/credentials` file
 - IAM roles (for EC2/ECS)
 
-**Alternative:** Static keys in config (NOT recommended for production)
-```json
-{
-  "storage": {
-    "credentials": {
-      "mode": "static",
-      "access_key_id": "AKIAIOSFODNN7EXAMPLE",
-      "secret_access_key": "wJalr..."
-    }
-  }
-}
-```
-
-**Security:** Add `.akashica/config.json` to `.gitignore` if it contains credentials.
+**Region specified during init** (interactive prompt).
 
 ## Common Workflows
 
 ### Publishing Content
 
 ```bash
-# Initialize repository
-akashica init --s3-bucket content-prod --s3-region us-west-2
+# Initialize repository and profile
+akashica init --profile content-prod s3://content-prod/repos/photos
+export AKASHICA_PROFILE=content-prod
 
 # Create workspace
 akashica checkout main
 
-# Upload content
+# Upload content (aka: prefix required)
 akashica cd /2024/october
-akashica cp ~/photos/sunset.jpg sunset.jpg
-akashica cp ~/photos/beach.jpg beach.jpg
+akashica cp ~/photos/sunset.jpg aka:sunset.jpg
+akashica cp ~/photos/beach.jpg aka:beach.jpg
 
 # Organize
-akashica mv sunset.jpg ../september/sunset.jpg
+akashica mv aka:sunset.jpg aka:../september/sunset.jpg
 
 # Commit
 akashica status
@@ -252,16 +252,19 @@ akashica commit -m "Add October photos"
 ### Managing Large Datasets
 
 ```bash
+# Setup profile
+export AKASHICA_PROFILE=weather-data
+
 # Navigate virtual filesystem
 akashica checkout main
 akashica cd /datasets/weather/2024
 
-# Add new data (uploads to S3 immediately)
-akashica cp ./october-data.csv october.csv
+# Add new data (uploads to remote workspace)
+akashica cp ./october-data.csv aka:october.csv
 
 # Review before committing
 akashica ls
-akashica cat october.csv | head -10
+akashica cat aka:october.csv | head -10
 
 # Commit changes
 akashica commit -m "Add October weather data"
@@ -270,17 +273,20 @@ akashica commit -m "Add October weather data"
 ### Downloading Specific Files
 
 ```bash
-# Checkout read-only view
+# Setup profile
+export AKASHICA_PROFILE=reports
+
+# Checkout workspace
 akashica checkout main
 
 # Navigate to desired location
 akashica cd /reports/2024
 
-# Download specific files
-akashica cp Q3-report.pdf ~/Downloads/
-akashica cp Q4-report.pdf ~/Downloads/
+# Download specific files (aka: prefix required)
+akashica cp aka:Q3-report.pdf ~/Downloads/
+akashica cp aka:Q4-report.pdf ~/Downloads/
 
-# No need to commit (read-only)
+# No need to commit (no modifications made)
 ```
 
 ## Troubleshooting
@@ -300,24 +306,28 @@ akashica checkout main
 
 **Solution:** Use regular `cp` command for local-to-local copies.
 
-### "Remote-to-remote copy not yet supported"
+### "Repository paths must use aka: prefix"
 
-**Problem:** Absolute paths like `/tmp/file` are treated as remote.
+**Problem:** Trying to use repository paths without `aka:` prefix.
 
-**Solution:** Use `local:` prefix:
+**Solution:** Add `aka:` prefix to repository paths:
 ```bash
-akashica cp report.pdf local:/tmp/report.pdf
+# ❌ Wrong
+akashica cp ~/file.txt report.pdf
+
+# ✅ Correct
+akashica cp ~/file.txt aka:report.pdf
 ```
 
 ### "File not found"
 
 **Problem:** Path doesn't exist in virtual filesystem.
 
-**Solution:** Check current directory and use absolute paths:
+**Solution:** Check current directory and use absolute aka: paths:
 ```bash
 akashica pwd
 akashica ls
-akashica cat /full/path/to/file.txt
+akashica cat aka:/full/path/to/file.txt
 ```
 
 ## Performance Notes
@@ -348,7 +358,8 @@ akashica cat /full/path/to/file.txt
 
 ## Next Steps
 
-- Read the full design: `docs/plans/virtual-filesystem-ux.md`
+- Read the comprehensive guide: `docs/VIRTUAL_FILESYSTEM_GUIDE.md`
+- Learn about profile-based architecture: `docs/PROFILE_ARCHITECTURE.md`
 - Try with S3: Configure credentials and test with real bucket
 - Report issues: https://github.com/anthropics/akashica/issues
 

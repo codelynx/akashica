@@ -7,7 +7,8 @@ struct Log: AsyncParsableCommand {
         abstract: "Show commit logs"
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Option(name: .long, help: "Branch name")
     var branch: String = "main"
@@ -16,11 +17,9 @@ struct Log: AsyncParsableCommand {
     var limit: Int = 10
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
 
-        // Create validated repository (efficient - one S3 adapter creation)
-        let repo = try await config.createValidatedRepository()
-        let history = try await repo.commitHistory(branch: branch, limit: limit)
+        let history = try await context.repository.commitHistory(branch: branch, limit: limit)
 
         for (commit, metadata) in history {
             let date = formatDate(metadata.timestamp)

@@ -6,24 +6,14 @@ struct Pwd: AsyncParsableCommand {
         abstract: "Print virtual working directory"
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
 
-        // For S3 mode, just check if config looks valid (don't validate full repository)
-        // For local mode, ensure .akashica exists
-        if config.s3Bucket == nil && !config.isInRepository {
-            print("Error: Not in an Akashica repository")
-            print("Run 'akashica init' to initialize a repository")
-            throw ExitCode.failure
-        }
-
-        // Get virtual CWD
-        let vctx = config.virtualContext()
-        let cwd = vctx.currentDirectory()
-
-        // Print path (use "/" for root)
+        // Print virtual CWD from workspace state
+        let cwd = context.virtualCwd
         print(cwd.pathString.isEmpty ? "/" : cwd.pathString)
     }
 }

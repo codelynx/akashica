@@ -8,17 +8,20 @@ struct Checkout: AsyncParsableCommand {
         abstract: "Create a new workspace from a branch or commit"
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "Branch name or commit ID (e.g., 'main' or '@1001')")
     var ref: String
 
     func run() async throws {
-        let config = storage.makeConfig()
+        var context = try await CommandContext.resolve(profileFlag: profile)
 
-        // Create validated storage (efficient - one S3 adapter creation)
-        let storageAdapter = try await config.createValidatedStorage()
-        let repo = AkashicaRepository(storage: storageAdapter)
+        // Exit view mode if active
+        if context.workspace.view.active {
+            try await context.exitView()
+            print("Exited view mode")
+        }
 
         // Parse reference (branch or commit)
         let refType = RefType.parse(ref)
@@ -29,23 +32,15 @@ struct Checkout: AsyncParsableCommand {
         switch refType {
         case .commit(let commitID):
             // Checkout from commit ID
-            // Verify commit exists
-            do {
-                _ = try await storageAdapter.readCommitMetadata(commit: commitID)
-            } catch {
-                print("Error: Commit '\(ref)' not found")
-                throw ExitCode.failure
-            }
-
-            workspace = try await repo.createWorkspace(from: commitID)
+            workspace = try await context.repository.createWorkspace(from: commitID)
             baseCommit = commitID
 
         case .branch(let branchName):
             // Checkout from branch
             do {
-                workspace = try await repo.createWorkspace(fromBranch: branchName)
-                let pointer = try await storageAdapter.readBranch(name: branchName)
-                baseCommit = pointer.head
+                workspace = try await context.repository.createWorkspace(fromBranch: branchName)
+                // Get base commit from workspace ID
+                baseCommit = workspace.baseCommit
             } catch {
                 print("Error: Branch '\(branchName)' not found")
                 print("Use 'akashica branch' to see available branches")
@@ -53,20 +48,12 @@ struct Checkout: AsyncParsableCommand {
             }
         }
 
-        // Ensure .akashica directory exists (for both local and S3 modes)
-        if !FileManager.default.fileExists(atPath: config.akashicaPath.path) {
-            try FileManager.default.createDirectory(
-                at: config.akashicaPath,
-                withIntermediateDirectories: true
-            )
+        // Update workspace state with new workspace
+        try await context.updateWorkspace { state in
+            state.workspaceId = workspace.fullReference
+            state.baseCommit = baseCommit.value
+            state.virtualCwd = "/"  // Reset to root
         }
-
-        // Save workspace reference
-        try config.saveWorkspace(workspace)
-
-        // Initialize virtual CWD to root
-        let vctx = config.virtualContext()
-        try vctx.initialize()
 
         switch refType {
         case .commit:
