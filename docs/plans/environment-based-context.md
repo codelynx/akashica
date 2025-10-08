@@ -4,7 +4,7 @@
 **Version**: 0.10.0
 **Date**: 2025-10-08
 **Author**: Architecture Planning
-**Implementation**: Complete (local storage only; S3 planned for future)
+**Implementation**: Complete
 
 ## Implementation Status
 
@@ -17,11 +17,12 @@
 - All 15+ CLI commands refactored to use CommandContext
 - Zero working directory pollution
 - Shell CWD independence
+- **S3 storage support** (full integration with AWS credential chain)
 
 🔮 **Future Work**:
-- S3 storage support (config structure ready, implementation pending)
 - Local read cache for S3 operations
 - Progress reporting for large operations
+- S3 multipart uploads for large files
 
 ## Overview
 
@@ -31,7 +32,7 @@ Pure environment-based architecture inspired by AWS CLI where:
 2. **No backward compatibility concerns** - We're pre-v1.0.0, clean slate design
 3. **Profile-based context** via environment variables (`AKASHICA_PROFILE`)
 4. **Per-profile configuration** in `~/.akashica/configurations/{profile}.json`
-5. **Repository storage** separate from working directories (NAS/local; S3 planned for future)
+5. **Repository storage** separate from working directories (NAS/local/S3)
 
 ## Core Problem
 
@@ -95,15 +96,13 @@ Pure environment-based architecture inspired by AWS CLI where:
         ├── commit.json
         └── .dir
 
-# Repository storage (S3) - FUTURE: Not yet implemented in v0.10.0
+# Repository storage (S3)
 s3://my-bucket/repos/project-x/
 ├── .akashica.json
 ├── objects/
 ├── branches/
 └── changeset/
 ```
-
-**Note**: S3 storage support is planned for a future release. v0.10.0 implements local storage only.
 
 ### Profile Configuration
 
@@ -122,7 +121,7 @@ Each profile is stored as an individual JSON file in `~/.akashica/configurations
 }
 ```
 
-**`~/.akashica/configurations/s3-assets.json`** (FUTURE - S3 not yet implemented):
+**`~/.akashica/configurations/s3-assets.json`**:
 ```json
 {
   "version": "1.0",
@@ -275,9 +274,7 @@ To use this profile:
 You can now run akashica commands from any directory.
 ```
 
-#### Create New Repository (S3 Storage) - FUTURE
-
-**Note**: S3 storage is not yet implemented in v0.10.0. This example shows planned functionality.
+#### Create New Repository (S3 Storage)
 
 ```bash
 # Initialize with S3 URI - storage type inferred from s3:// prefix
@@ -319,6 +316,8 @@ Run 'akashica checkout <branch>' to create a workspace.
 
 **Note**: The current implementation does not list available branches during init. Use `akashica branch list` after attaching to see branches.
 
+**AWS Credentials**: S3 profiles use the AWS credential chain (environment variables, ~/.aws/credentials, IAM roles). No credentials are stored in profile configuration.
+
 ### Daily Workflow
 
 #### Terminal Sessions with Different Profiles
@@ -344,8 +343,7 @@ $ akashica commit -m "Add intro video"
 $ ls ~/Desktop
 intro.mp4  # Shell directory unchanged, clean, no .akashica/!
 
-# Terminal B - Asset management team (FUTURE: S3 not yet implemented)
-# This example shows planned S3 functionality - v0.10.0 supports local storage only
+# Terminal B - Asset management team (S3 storage)
 $ export AKASHICA_PROFILE=s3-assets
 $ cd /tmp  # Different profile, any shell location
 $ akashica status
@@ -532,7 +530,7 @@ Each profile is stored as an individual JSON file in `~/.akashica/configurations
 }
 ```
 
-**`~/.akashica/configurations/s3-assets.json`** (FUTURE - S3 not yet implemented):
+**`~/.akashica/configurations/s3-assets.json`**:
 ```json
 {
   "version": "1.0",
@@ -549,7 +547,7 @@ Each profile is stored as an individual JSON file in `~/.akashica/configurations
 
 **Notes**:
 - No consolidated global config file
-- S3 storage support is planned for a future release; v0.10.0 implements local storage only
+- S3 credentials use AWS credential chain (no credentials stored in profile files)
 - Each profile is independent
 - Profile name matches filename (e.g., `nas-video.json` → profile "nas-video")
 - Managed via `akashica init` and `akashica profile` commands
