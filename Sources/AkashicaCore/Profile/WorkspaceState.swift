@@ -4,8 +4,8 @@ import Foundation
 public struct WorkspaceState: Codable {
     public let version: String
     public let profile: String
-    public let workspaceId: String  // Canonical format: @1045$ws_a3f2b8d9
-    public let baseCommit: String   // @1045
+    public var workspaceId: String  // Canonical format: @1045$ws_a3f2b8d9
+    public var baseCommit: String   // @1045
     public var virtualCwd: String   // Repository virtual CWD: /docs/reports
     public let created: Date
     public var lastUsed: Date

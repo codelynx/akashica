@@ -7,7 +7,8 @@ struct Commit: AsyncParsableCommand {
         abstract: "Record changes to the repository"
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Option(name: .shortAndLong, help: "Commit message")
     var message: String
@@ -16,32 +17,37 @@ struct Commit: AsyncParsableCommand {
     var branch: String = "main"
 
     func run() async throws {
-        let config = storage.makeConfig()
+        var context = try await CommandContext.resolve(profileFlag: profile)
 
-        // Create validated repository (efficient - one S3 adapter creation)
-        let repo = try await config.createValidatedRepository()
-
-        // Get current workspace
-        guard let workspace = try config.currentWorkspace() else {
-            print("Error: Not in a workspace. Use 'akashica checkout' to create one.")
+        // Check if in view mode
+        if context.workspace.view.active {
+            print("Error: Cannot commit in view mode")
+            print("Exit view mode first: akashica view --exit")
             throw ExitCode.failure
         }
+
+        // Get workspace ID
+        let workspace = try context.currentWorkspaceID()
 
         // Get author name
         let author = ProcessInfo.processInfo.environment["USER"] ?? "unknown"
 
         // Publish workspace
-        let newCommit = try await repo.publishWorkspace(
+        let newCommit = try await context.repository.publishWorkspace(
             workspace,
             toBranch: branch,
             message: message,
             author: author
         )
 
-        // Clear workspace
-        try config.clearWorkspace()
+        // After commit, old workspace is deleted - create new workspace from new commit
+        let newWorkspace = try await context.repository.createWorkspace(from: newCommit)
+        try await context.updateWorkspace { state in
+            state.workspaceId = newWorkspace.fullReference
+            state.baseCommit = newCommit.value
+        }
 
         print("[\(branch) \(newCommit.value)] \(message)")
-        print("Workspace published and closed")
+        print("Workspace published. New workspace: \(newWorkspace.fullReference)")
     }
 }
