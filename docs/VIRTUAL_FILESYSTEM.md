@@ -348,7 +348,8 @@ akashica cat /full/path/to/file.txt
 
 ## Next Steps
 
-- Read the full design: `docs/plans/virtual-filesystem-ux.md`
+- Read the comprehensive guide: `docs/VIRTUAL_FILESYSTEM_GUIDE.md`
+- Learn about profile-based architecture: `docs/PROFILE_ARCHITECTURE.md`
 - Try with S3: Configure credentials and test with real bucket
 - Report issues: https://github.com/anthropics/akashica/issues
 
