@@ -1,9 +1,27 @@
 # Environment-Based Context for Akashica
 
-**Status**: Draft
+**Status**: Implemented ✅
 **Version**: 0.10.0
 **Date**: 2025-10-08
 **Author**: Architecture Planning
+**Implementation**: Complete (local storage only; S3 planned for future)
+
+## Implementation Status
+
+✅ **Completed in v0.10.0**:
+- Profile-based context resolution (--profile flag, AKASHICA_PROFILE env)
+- Per-profile configuration files (~/.akashica/configurations/{profile}.json)
+- Workspace state management (~/.akashica/workspaces/{profile}/state.json)
+- Virtual CWD tracking and persistence
+- View mode support
+- All 15+ CLI commands refactored to use CommandContext
+- Zero working directory pollution
+- Shell CWD independence
+
+🔮 **Future Work**:
+- S3 storage support (config structure ready, implementation pending)
+- Local read cache for S3 operations
+- Progress reporting for large operations
 
 ## Overview
 
@@ -12,8 +30,8 @@ Pure environment-based architecture inspired by AWS CLI where:
 1. **Working directories NEVER contain Akashica metadata** - Stay completely clean
 2. **No backward compatibility concerns** - We're pre-v1.0.0, clean slate design
 3. **Profile-based context** via environment variables (`AKASHICA_PROFILE`)
-4. **Global configuration** in `~/.akashica/config.json`
-5. **Repository storage** separate from working directories (NAS/S3/local)
+4. **Per-profile configuration** in `~/.akashica/configurations/{profile}.json`
+5. **Repository storage** separate from working directories (NAS/local; S3 planned for future)
 
 ## Core Problem
 
@@ -33,7 +51,14 @@ Pure environment-based architecture inspired by AWS CLI where:
 └── myfile.txt           # ONLY user content - CLEAN!
 
 ~/.akashica/
-└── config.json          # Global profile configuration
+├── configurations/
+│   ├── nas-video.json   # Individual profile config
+│   └── local-dev.json   # Individual profile config
+└── workspaces/
+    ├── nas-video/
+    │   └── state.json   # Workspace state
+    └── local-dev/
+        └── state.json   # Workspace state
 
 /Volumes/NAS/repos/video-campaign/
 ├── .akashica.json       # Repository metadata
@@ -70,13 +95,15 @@ Pure environment-based architecture inspired by AWS CLI where:
         ├── commit.json
         └── .dir
 
-# Repository storage (S3)
+# Repository storage (S3) - FUTURE: Not yet implemented in v0.10.0
 s3://my-bucket/repos/project-x/
 ├── .akashica.json
 ├── objects/
 ├── branches/
 └── changeset/
 ```
+
+**Note**: S3 storage support is planned for a future release. v0.10.0 implements local storage only.
 
 ### Profile Configuration
 
@@ -95,7 +122,7 @@ Each profile is stored as an individual JSON file in `~/.akashica/configurations
 }
 ```
 
-**`~/.akashica/configurations/s3-assets.json`**:
+**`~/.akashica/configurations/s3-assets.json`** (FUTURE - S3 not yet implemented):
 ```json
 {
   "version": "1.0",
@@ -248,7 +275,9 @@ To use this profile:
 You can now run akashica commands from any directory.
 ```
 
-#### Create New Repository (S3 Storage)
+#### Create New Repository (S3 Storage) - FUTURE
+
+**Note**: S3 storage is not yet implemented in v0.10.0. This example shows planned functionality.
 
 ```bash
 # Initialize with S3 URI - storage type inferred from s3:// prefix
@@ -276,18 +305,19 @@ $ akashica init --profile team-video /Volumes/NAS/repos/video-campaign
 Checking repository at /Volumes/NAS/repos/video-campaign...
 ✓ Found existing repository: video-campaign
 
-Available branches:
-  * main (@1045)
-    feature/intro (@1032)
-
 Attach to this repository? [Y/n]: Y
 
 ✓ Attached profile: team-video
 ✓ Saved profile: ~/.akashica/configurations/team-video.json
+✓ Workspace state: ~/.akashica/workspaces/team-video/state.json
 
 To use this profile:
   export AKASHICA_PROFILE=team-video
+
+Run 'akashica checkout <branch>' to create a workspace.
 ```
+
+**Note**: The current implementation does not list available branches during init. Use `akashica branch list` after attaching to see branches.
 
 ### Daily Workflow
 
@@ -314,7 +344,8 @@ $ akashica commit -m "Add intro video"
 $ ls ~/Desktop
 intro.mp4  # Shell directory unchanged, clean, no .akashica/!
 
-# Terminal B - Asset management team (different profile)
+# Terminal B - Asset management team (FUTURE: S3 not yet implemented)
+# This example shows planned S3 functionality - v0.10.0 supports local storage only
 $ export AKASHICA_PROFILE=s3-assets
 $ cd /tmp  # Different profile, any shell location
 $ akashica status
@@ -501,7 +532,7 @@ Each profile is stored as an individual JSON file in `~/.akashica/configurations
 }
 ```
 
-**`~/.akashica/configurations/s3-assets.json`**:
+**`~/.akashica/configurations/s3-assets.json`** (FUTURE - S3 not yet implemented):
 ```json
 {
   "version": "1.0",
@@ -518,6 +549,7 @@ Each profile is stored as an individual JSON file in `~/.akashica/configurations
 
 **Notes**:
 - No consolidated global config file
+- S3 storage support is planned for a future release; v0.10.0 implements local storage only
 - Each profile is independent
 - Profile name matches filename (e.g., `nas-video.json` → profile "nas-video")
 - Managed via `akashica init` and `akashica profile` commands

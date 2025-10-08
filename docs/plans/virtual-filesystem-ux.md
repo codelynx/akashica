@@ -1,7 +1,43 @@
 # Virtual Filesystem UX Vision
 
 **Date**: 2025-10-07
-**Status**: Brainstorming / Planning
+**Status**: HISTORICAL - See implementation notes below
+**Implementation**: Core vision achieved in v0.10.0 with architectural improvements
+
+---
+
+## ⚠️ IMPLEMENTATION NOTE
+
+This document represents the **initial brainstorming** for the virtual filesystem UX. The core vision has been **successfully implemented in v0.10.0**, but with significant architectural improvements:
+
+### What Changed from This Document
+
+**Original concept** (this document):
+- `.akashica/config` file in each working directory
+- Commands like `akashica ls /path` (no URI scheme)
+- Per-directory configuration
+
+**Actual v0.10.0 implementation** (better):
+- **Zero working directory pollution** - All config in `~/.akashica/`
+- **Profile-based architecture** - `AKASHICA_PROFILE` environment variable
+- **aka:// URI scheme** - Explicit path scoping (e.g., `aka:/docs/file.txt`)
+- **Shell independence** - Commands work from any directory
+- **Per-profile workspace state** - `~/.akashica/workspaces/{profile}/state.json`
+
+### Core Vision: ✅ Achieved
+
+The fundamental goals are all met:
+- ✅ Separate working directory from content storage
+- ✅ Virtual filesystem navigation (`ls`, `cd`, `cat`, `pwd`)
+- ✅ Thin client (minimal local footprint)
+- ✅ Workspace as staging area for changes
+- ✅ Content stays remote, no massive local checkouts
+
+**For the actual implemented architecture, see**: `docs/plans/environment-based-context.md`
+
+---
+
+## Original Planning Document (Historical)
 
 ## Background
 
