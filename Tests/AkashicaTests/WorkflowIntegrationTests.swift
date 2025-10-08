@@ -37,6 +37,15 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         try await storage.writeRootManifest(commit: commitID, data: manifestData)
 
+        // Write commit metadata (needed for ancestry checks)
+        let metadata = CommitMetadata(
+            message: "Initial commit",
+            author: "test",
+            timestamp: Date(),
+            parent: nil
+        )
+        try await storage.writeCommitMetadata(commit: commitID, metadata: metadata)
+
         // Create main branch pointing to this commit
         try await storage.updateBranch(name: "main", expectedCurrent: nil, newCommit: commitID)
     }
@@ -284,5 +293,204 @@ final class WorkflowIntegrationTests: XCTestCase {
         // Now it exists
         let existsAfterWrite = try await session.fileExists(at: RepositoryPath(string: "new.txt"))
         XCTAssertTrue(existsAfterWrite)
+    }
+
+    // MARK: - Branch Reset Tests
+
+    func testResetBranchToAncestor() async throws {
+        // Create commit chain: @1001 -> @1002 -> @1003
+        let commit1002 = try await createCommit(parent: CommitID(value: "@1001"), message: "Second commit")
+        let commit1003 = try await createCommit(parent: commit1002, message: "Third commit")
+
+        // Verify branch points to @1003
+        let head = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(head, commit1003)
+
+        // Reset to @1002
+        try await repository.resetBranch(name: "main", to: commit1002)
+
+        // Verify branch now points to @1002
+        let newHead = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(newHead, commit1002)
+    }
+
+    func testResetBranchToNonAncestorFails() async throws {
+        // Create commit chain: @1001 -> @1002 -> @1003
+        let commit1002 = try await createCommit(parent: CommitID(value: "@1001"), message: "Second commit")
+        _ = try await createCommit(parent: commit1002, message: "Third commit")
+
+        // Create unrelated commit @2001
+        let unrelatedCommit = CommitID(value: "@2001")
+        let content = "Unrelated content".data(using: .utf8)!
+        let hash = try await storage.writeObject(data: content)
+        let manifestEntry = "\(hash.value):\(content.count):unrelated.txt"
+        let manifestData = manifestEntry.data(using: .utf8)!
+        try await storage.writeRootManifest(commit: unrelatedCommit, data: manifestData)
+
+        let metadata = CommitMetadata(
+            message: "Unrelated commit",
+            author: "test",
+            timestamp: Date(),
+            parent: nil
+        )
+        try await storage.writeCommitMetadata(commit: unrelatedCommit, metadata: metadata)
+
+        // Try to reset to unrelated commit - should fail
+        do {
+            try await repository.resetBranch(name: "main", to: unrelatedCommit)
+            XCTFail("Should have thrown nonAncestorReset")
+        } catch AkashicaError.nonAncestorReset(let branch, _, let target) {
+            XCTAssertEqual(branch, "main")
+            XCTAssertEqual(target, unrelatedCommit)
+        }
+    }
+
+    func testResetBranchWithForce() async throws {
+        // Create commit chain: @1001 -> @1002 -> @1003
+        let commit1002 = try await createCommit(parent: CommitID(value: "@1001"), message: "Second commit")
+        _ = try await createCommit(parent: commit1002, message: "Third commit")
+
+        // Create unrelated commit @2001
+        let unrelatedCommit = CommitID(value: "@2001")
+        let content = "Unrelated content".data(using: .utf8)!
+        let hash = try await storage.writeObject(data: content)
+        let manifestEntry = "\(hash.value):\(content.count):unrelated.txt"
+        let manifestData = manifestEntry.data(using: .utf8)!
+        try await storage.writeRootManifest(commit: unrelatedCommit, data: manifestData)
+
+        let metadata = CommitMetadata(
+            message: "Unrelated commit",
+            author: "test",
+            timestamp: Date(),
+            parent: nil
+        )
+        try await storage.writeCommitMetadata(commit: unrelatedCommit, metadata: metadata)
+
+        // Reset with --force should succeed
+        try await repository.resetBranch(name: "main", to: unrelatedCommit, force: true)
+
+        // Verify branch now points to unrelated commit
+        let newHead = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(newHead, unrelatedCommit)
+    }
+
+    func testResetBranchToSameCommitIsNoop() async throws {
+        let currentHead = try await repository.currentCommit(branch: "main")
+
+        // Reset to current head (should be no-op)
+        try await repository.resetBranch(name: "main", to: currentHead)
+
+        // Verify branch still points to same commit
+        let newHead = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(newHead, currentHead)
+    }
+
+    func testResetBranchToNonexistentCommitFails() async throws {
+        let nonexistentCommit = CommitID(value: "@9999")
+
+        // Try to reset to nonexistent commit - should fail even with --force
+        do {
+            try await repository.resetBranch(name: "main", to: nonexistentCommit, force: true)
+            XCTFail("Should have thrown commitNotFound")
+        } catch AkashicaError.commitNotFound {
+            // Expected
+        }
+
+        // Verify branch still points to original commit
+        let head = try await repository.currentCommit(branch: "main")
+        XCTAssertEqual(head.value, "@1001")
+    }
+
+    func testIsAncestor() async throws {
+        // Create commit chain: @1001 -> @1002 -> @1003
+        let commit1002 = try await createCommit(parent: CommitID(value: "@1001"), message: "Second commit")
+        let commit1003 = try await createCommit(parent: commit1002, message: "Third commit")
+
+        // @1001 is ancestor of @1003
+        let isAncestor1 = try await repository.isAncestor(CommitID(value: "@1001"), of: commit1003)
+        XCTAssertTrue(isAncestor1)
+
+        // @1002 is ancestor of @1003
+        let isAncestor2 = try await repository.isAncestor(commit1002, of: commit1003)
+        XCTAssertTrue(isAncestor2)
+
+        // @1003 is ancestor of @1003 (self)
+        let isAncestor3 = try await repository.isAncestor(commit1003, of: commit1003)
+        XCTAssertTrue(isAncestor3)
+
+        // @1003 is NOT ancestor of @1002
+        let isAncestor4 = try await repository.isAncestor(commit1003, of: commit1002)
+        XCTAssertFalse(isAncestor4)
+
+        // Create unrelated commit
+        let unrelated = CommitID(value: "@2001")
+        let content = "Unrelated".data(using: .utf8)!
+        let hash = try await storage.writeObject(data: content)
+        let manifestEntry = "\(hash.value):\(content.count):file.txt"
+        let manifestData = manifestEntry.data(using: .utf8)!
+        try await storage.writeRootManifest(commit: unrelated, data: manifestData)
+
+        let metadata = CommitMetadata(
+            message: "Unrelated",
+            author: "test",
+            timestamp: Date(),
+            parent: nil
+        )
+        try await storage.writeCommitMetadata(commit: unrelated, metadata: metadata)
+
+        // Unrelated commit is NOT ancestor
+        let isAncestor5 = try await repository.isAncestor(unrelated, of: commit1003)
+        XCTAssertFalse(isAncestor5)
+    }
+
+    func testCommitsBetween() async throws {
+        // Create commit chain: @1001 -> @1002 -> @1003 -> @1004
+        let commit1002 = try await createCommit(parent: CommitID(value: "@1001"), message: "Second")
+        let commit1003 = try await createCommit(parent: commit1002, message: "Third")
+        let commit1004 = try await createCommit(parent: commit1003, message: "Fourth")
+
+        // Get commits between @1001 and @1004
+        let commits = try await repository.commitsBetween(from: CommitID(value: "@1001"), to: commit1004)
+
+        // Should return [@1004, @1003, @1002] (reverse chronological, excluding @1001)
+        XCTAssertEqual(commits.count, 3)
+        XCTAssertEqual(commits[0].commit, commit1004)
+        XCTAssertEqual(commits[0].metadata.message, "Fourth")
+        XCTAssertEqual(commits[1].commit, commit1003)
+        XCTAssertEqual(commits[1].metadata.message, "Third")
+        XCTAssertEqual(commits[2].commit, commit1002)
+        XCTAssertEqual(commits[2].metadata.message, "Second")
+
+        // Get commits between @1002 and @1004
+        let commits2 = try await repository.commitsBetween(from: commit1002, to: commit1004)
+        XCTAssertEqual(commits2.count, 2)
+        XCTAssertEqual(commits2[0].commit, commit1004)
+        XCTAssertEqual(commits2[1].commit, commit1003)
+
+        // Same commit returns empty
+        let commits3 = try await repository.commitsBetween(from: commit1004, to: commit1004)
+        XCTAssertEqual(commits3.count, 0)
+    }
+
+    // MARK: - Helper for Branch Reset Tests
+
+    private func createCommit(parent: CommitID, message: String) async throws -> CommitID {
+        // Create workspace from parent
+        let workspace = try await repository.createWorkspace(from: parent)
+        let session = await repository.session(workspace: workspace)
+
+        // Make a change (write a file with commit-specific content)
+        let content = "\(message) content".data(using: .utf8)!
+        try await session.writeFile(content, to: RepositoryPath(string: "\(message).txt"))
+
+        // Publish to create new commit
+        let newCommit = try await repository.publishWorkspace(
+            workspace,
+            toBranch: "main",
+            message: message,
+            author: "test"
+        )
+
+        return newCommit
     }
 }

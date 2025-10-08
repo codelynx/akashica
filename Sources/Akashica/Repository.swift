@@ -180,6 +180,86 @@ public actor AkashicaRepository {
         return history
     }
 
+    /// Reset branch pointer to a specific commit
+    /// - Parameters:
+    ///   - name: Branch name to reset
+    ///   - target: Target commit to point to
+    ///   - force: If true, skip ancestry check (allows non-ancestor resets)
+    /// - Throws: `AkashicaError.nonAncestorReset` if target is not an ancestor and force is false
+    /// - Throws: `AkashicaError.commitNotFound` if target commit does not exist
+    public func resetBranch(name: String, to target: CommitID, force: Bool = false) async throws {
+        // Get current branch head
+        let current = try await currentCommit(branch: name)
+
+        // If target == current, nothing to do
+        if current == target {
+            return
+        }
+
+        // Verify target commit exists (always, even with --force)
+        do {
+            _ = try await storage.readCommitMetadata(commit: target)
+        } catch {
+            throw AkashicaError.commitNotFound(target)
+        }
+
+        // Check ancestry unless force is used
+        if !force {
+            let isAncestor = try await isAncestor(target, of: current)
+            if !isAncestor {
+                throw AkashicaError.nonAncestorReset(
+                    branch: name,
+                    current: current,
+                    target: target
+                )
+            }
+        }
+
+        // Update branch pointer with CAS
+        try await storage.updateBranch(
+            name: name,
+            expectedCurrent: current,
+            newCommit: target
+        )
+    }
+
+    /// Check if a commit is an ancestor of another commit
+    /// - Parameters:
+    ///   - ancestor: Potential ancestor commit
+    ///   - descendant: Potential descendant commit
+    /// - Returns: True if ancestor is in the parent chain of descendant
+    public func isAncestor(_ ancestor: CommitID, of descendant: CommitID) async throws -> Bool {
+        var current: CommitID? = descendant
+
+        while let commit = current {
+            if commit == ancestor {
+                return true
+            }
+            let metadata = try await storage.readCommitMetadata(commit: commit)
+            current = metadata.parent
+        }
+
+        return false
+    }
+
+    /// Get all commits between two commits (exclusive of 'from', inclusive of 'to')
+    /// - Parameters:
+    ///   - from: Starting commit (not included in result)
+    ///   - to: Ending commit (included in result)
+    /// - Returns: Array of commits from 'to' back to (but not including) 'from'
+    public func commitsBetween(from: CommitID, to: CommitID) async throws -> [(commit: CommitID, metadata: CommitMetadata)] {
+        var commits: [(CommitID, CommitMetadata)] = []
+        var current: CommitID? = to
+
+        while let commit = current, commit != from {
+            let metadata = try await storage.readCommitMetadata(commit: commit)
+            commits.append((commit, metadata))
+            current = metadata.parent
+        }
+
+        return commits
+    }
+
     // MARK: - Internal Helpers
 
     private func generateWorkspaceSuffix() -> String {

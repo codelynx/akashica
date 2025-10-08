@@ -9,6 +9,7 @@ public enum AkashicaError: Error {
     case objectDeleted(hash: ContentHash, tombstone: Tombstone)
     case branchNotFound(String)
     case branchConflict(branch: String, expected: CommitID, actual: CommitID?)
+    case nonAncestorReset(branch: String, current: CommitID, target: CommitID)
     case invalidManifest(String)
     case storageError(Error)
 }
@@ -35,6 +36,11 @@ extension AkashicaError: LocalizedError {
             } else {
                 return "Branch conflict: \(branch) expected \(expected) but branch does not exist"
             }
+        case .nonAncestorReset(let branch, let current, let target):
+            return """
+            Cannot reset branch '\(branch)' to \(target): not an ancestor of current head \(current)
+            Use --force to reset to an unrelated commit
+            """
         case .invalidManifest(let reason):
             return "Invalid manifest: \(reason)"
         case .storageError(let error):
