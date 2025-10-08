@@ -141,7 +141,7 @@ Per-profile state: `~/.akashica/workspaces/{profile}/state.json`
   "profile": "nas-video",
   "workspaceId": "@1045$ws_a3f2b8d9",
   "baseCommit": "@1045",
-  "virtualCwd": "/",
+  "virtualCwd": "",
   "created": "2025-10-08T10:30:00Z",
   "lastUsed": "2025-10-08T14:22:00Z",
   "view": {
@@ -150,6 +150,8 @@ Per-profile state: `~/.akashica/workspaces/{profile}/state.json`
   }
 }
 ```
+
+**Note**: The root directory is stored as an empty string (`""`) in the state file but displayed as `/` to users. When reading state files, treat empty string as root path.
 
 **View mode**:
 ```json
@@ -371,16 +373,12 @@ intro.mp4  # Shell directory unchanged, no .akashica/
 # Terminal A - Video team
 $ export AKASHICA_PROFILE=nas-video
 $ akashica status
-Profile: nas-video
-Workspace: @1045$ws_a3f2b8d9
-Virtual CWD: /videos
+Nothing to commit, working tree clean
 
 # Terminal B - Assets team
 $ export AKASHICA_PROFILE=s3-assets
 $ akashica status
-Profile: s3-assets
-Workspace: @2001$ws_7f8e9a0b
-Virtual CWD: /icons
+Nothing to commit, working tree clean
 ```
 
 **Shell independence**:
@@ -417,16 +415,20 @@ Profiles:
 ```bash
 $ akashica profile show nas-video
 Profile: nas-video
+
 Storage:
   Type: local
   Path: /Volumes/NAS/repos/video-campaign
-  Repository ID: video-campaign
-Workspace:
+
+Configuration:
+  File: ~/.akashica/configurations/nas-video.json
+  Created: 2025-10-08 10:30:00
+
+Workspace State:
   ID: @1045$ws_a3f2b8d9
   Base Commit: @1045
   Virtual CWD: /videos
   Last Used: 2025-10-08 14:22:00
-View Mode: inactive
 ```
 
 **Delete profile**:
