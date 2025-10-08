@@ -22,20 +22,21 @@ struct Cat: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "File path (aka:// URI)")
     var path: String
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
 
         // Parse URI
         let uri = try AkaURI.parse(path)
 
         // Get session and resolve path
-        let session = try await config.getSession(for: uri.scope)
-        let targetPath = try config.resolvePathFromURI(uri)
+        let session = try await context.getSession(for: uri.scope)
+        let targetPath = context.resolvePathFromURI(uri)
 
         // Read file
         do {

@@ -23,21 +23,22 @@ struct Ls: AsyncParsableCommand {
         """
     )
 
-    @OptionGroup var storage: StorageOptions
+    @Option(name: .long, help: "Profile name (defaults to AKASHICA_PROFILE environment variable)")
+    var profile: String?
 
     @Argument(help: "Directory path (aka:// URI, defaults to current directory)")
     var path: String?
 
     func run() async throws {
-        let config = storage.makeConfig()
+        let context = try await CommandContext.resolve(profileFlag: profile)
 
-        // Default to aka:/ (current workspace, relative to CWD)
+        // Default to aka:/ (current workspace, relative to virtual CWD)
         let uriString = path ?? "aka:/"
         let uri = try AkaURI.parse(uriString)
 
         // Get session and resolve path
-        let session = try await config.getSession(for: uri.scope)
-        let targetPath = try config.resolvePathFromURI(uri)
+        let session = try await context.getSession(for: uri.scope)
+        let targetPath = context.resolvePathFromURI(uri)
 
         // List directory
         try await listDirectory(session: session, path: targetPath)
