@@ -7,7 +7,7 @@ struct AkashicaCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "akashica",
         abstract: "Content management system with tombstone-based deletion",
-        version: "0.8.0",
+        version: "0.9.0",
         subcommands: [
             Init.self,
             Checkout.self,
